@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 
 from app.application.auth.dto import (
     LoginUserCommand,
@@ -25,6 +25,7 @@ from app.infrastructure.api.schemas.auth import (
 )
 from app.infrastructure.api.schemas.common import ErrorResponse
 from app.infrastructure.api.schemas.users import UserResponse
+from app.infrastructure.security.rate_limit import auth_rate_limit, limiter
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -35,7 +36,9 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
     response_model=UserResponse,
     responses={409: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
 )
+@limiter.limit(auth_rate_limit)
 async def register(
+    request: Request,
     payload: RegisterRequest,
     uow: Annotated[UnitOfWork, Depends(get_uow)],
     clock: Annotated[Clock, Depends(get_clock)],
@@ -53,7 +56,9 @@ async def register(
     response_model=TokenPairResponse,
     responses={401: {"model": ErrorResponse}},
 )
+@limiter.limit(auth_rate_limit)
 async def login(
+    request: Request,
     payload: LoginRequest,
     uow: Annotated[UnitOfWork, Depends(get_uow)],
     hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
@@ -71,7 +76,9 @@ async def login(
     response_model=TokenPairResponse,
     responses={401: {"model": ErrorResponse}},
 )
+@limiter.limit(auth_rate_limit)
 async def refresh(
+    request: Request,
     payload: RefreshRequest,
     uow: Annotated[UnitOfWork, Depends(get_uow)],
     tokens: Annotated[TokenService, Depends(get_token_service)],

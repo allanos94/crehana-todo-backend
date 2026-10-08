@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from slowapi.errors import RateLimitExceeded
 from starlette.middleware.cors import CORSMiddleware
 
 from app.infrastructure.api.errors import register_exception_handlers
@@ -16,6 +17,7 @@ from app.infrastructure.api.routers.tasks import router as tasks_router
 from app.infrastructure.api.routers.users import router as users_router
 from app.infrastructure.config import get_settings
 from app.infrastructure.db.session import create_engine, create_session_factory
+from app.infrastructure.security.rate_limit import limiter, rate_limit_exceeded_handler
 
 # Python's root logger defaults to WARNING with no handler attached, which
 # would silently drop `app.notifications`' INFO invitation lines (and
@@ -48,6 +50,8 @@ def create_app() -> FastAPI:
     """Build and configure the FastAPI application instance."""
     settings = get_settings()
     app = FastAPI(title="Todo Lists API", lifespan=lifespan)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,

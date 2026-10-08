@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     #: so no origin is granted cross-origin access until configured.
     cors_allowed_origins: list[str] = []
 
+    #: Rate limiting is opt-in (off by default) so the test suite and local
+    #: development are never throttled by accident; the running container
+    #: enables it via `.env`/compose.
+    rate_limit_enabled: bool = False
+    auth_rate_limit: str = "10/minute"
+
 
 @lru_cache
 def get_settings() -> Settings:

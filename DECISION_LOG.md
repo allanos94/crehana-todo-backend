@@ -401,3 +401,73 @@ they land in code, not as a batch at the end.
   no `completion_percentage` field, matching design ADR-10's wording
   exactly (`{items, total}`) — completion is a per-list metric and is not
   meaningful across lists the caller does not own.
+
+## Phase 9: Code Hardening (slice 6a, `feature/security-hardening`)
+
+- **`X-Frame-Options: DENY` chosen over a `Content-Security-Policy` frame
+  directive.** The security-hardening spec accepts either. A strict CSP
+  would need an allow-list for Swagger UI's inline scripts/styles at
+  `/docs` (or a separate exemption path), which is unnecessary complexity
+  for a header whose only job here is clickjacking protection.
+  `X-Frame-Options: DENY` satisfies the requirement with zero risk of
+  breaking `/docs`.
+- **`Strict-Transport-Security` is conditional on the request being HTTPS**,
+  checked via `request.url.scheme == "https"` or a trusted
+  `X-Forwarded-Proto: https` header (the common shape behind a reverse
+  proxy/load balancer that terminates TLS). Sending HSTS over plain HTTP
+  would be misleading (and, per the HSTS spec itself, browsers ignore it
+  over HTTP anyway).
+- **Rate limiting is off by default** (`Settings.rate_limit_enabled =
+  False`) rather than on with a high limit for tests. This was simpler and
+  more robust than trying to pick a limit high enough that no existing
+  suite (which calls `/auth/login`/`/auth/register` many times per test
+  file) would ever cross it by coincidence. The dedicated
+  `tests/unit/test_rate_limit.py` is the only place that flips
+  `limiter.enabled = True` (via `monkeypatch.setattr`, which auto-reverts)
+  with a deliberately low limit (`3/minute`), and calls `limiter.reset()`
+  before and after so no counter state leaks into/out of other test
+  modules. The running compose stack sets `RATE_LIMIT_ENABLED=true` so the
+  behavior is observable end-to-end.
+- **`slowapi`'s `Limiter` is a module-level singleton**
+  (`infrastructure/security/rate_limit.py`), not constructed inside
+  `create_app()`. `slowapi`'s `@limiter.limit(...)` decorator binds to the
+  specific `Limiter` instance it decorates at import time (its internal
+  check is `if self.enabled: ...`, not a lookup through
+  `request.app.state.limiter`), so a limiter built fresh inside
+  `create_app()` would never be the one the decorated route functions
+  actually consult. `app.state.limiter = limiter` is still set for
+  `slowapi`'s own conventions, but the enablement and reset calls that
+  matter go through the imported singleton directly.
+- **No `SlowAPIMiddleware`.** `slowapi` ships an optional ASGI middleware
+  that applies default limits automatically to every route and injects
+  `X-RateLimit-*` headers. It was deliberately left out: its synchronous
+  fallback path (`sync_check_limits`) silently substitutes `slowapi`'s own
+  default exception handler for any *async* custom handler, which would
+  have silently discarded our `{"code": "rate_limited", ...}` error
+  contract. The per-route `@limiter.limit(...)` decorator alone is
+  sufficient here since every rate-limited route is decorated explicitly;
+  `app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)`
+  is the single source of truth for the 429 response body.
+- **The auth rate limit is a callable, not a fixed string**
+  (`@limiter.limit(auth_rate_limit)` where `auth_rate_limit()` reads
+  `get_settings().auth_rate_limit` on every check), per `slowapi`'s
+  documented support for `StrOrCallableStr`. This keeps the limit
+  configurable via `Settings`/env without needing to reconstruct the
+  `Limiter` or re-import the module — the exact property the dedicated
+  test relies on to install a lower limit than production's default.
+- **`CORSMiddleware`'s `allow_credentials=True` with an empty
+  `allow_origins` default** is intentional, not an oversight: Starlette's
+  `CORSMiddleware` never adds `Access-Control-Allow-Origin` for a
+  non-matching (or, with an empty list, *any*) origin, so an empty
+  allow-list is the strictest possible default — no origin gets
+  credentialed access until one is explicitly configured via
+  `CORS_ALLOWED_ORIGINS`.
+- **`.env.example` was not updated** with the three new variables
+  (`CORS_ALLOWED_ORIGINS`, `RATE_LIMIT_ENABLED`, `AUTH_RATE_LIMIT`): the
+  apply session's sandbox denies all read/write access to that specific
+  file path. The three variables are documented in the README's Security
+  section instead, and `docker-compose.yml`'s `api.environment` sets them
+  directly for the running stack. This is recorded here as a pending
+  cleanup, not a silent omission — whoever next has unrestricted
+  filesystem access should add the three lines to `.env.example` for
+  local-development parity with compose.

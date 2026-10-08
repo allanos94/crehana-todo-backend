@@ -172,15 +172,15 @@ The user has already confirmed, in this session, the gitflow slice/branch/merge-
 
 ## Phase 9: Code Hardening — Slice 6a (`feature/security-hardening`, PR 10)
 
-- [ ] 9.1 Branch `feature/security-hardening` off `develop` (after Phase 8's PR merges). Phases 9–11 are the first candidates to cut per the proposal's pending-if-time-runs-out order (Sentry → scanners → hardening); if time is short, cut Phase 11 first, then Phase 10, then this phase, and record each cut in `DECISION_LOG.md` as pending rather than silently skipping it.
-- [ ] 9.2 Context7 check: confirm the current `slowapi` rate-limiter integration pattern with FastAPI/Starlette before wiring it.
-- [ ] 9.3 RED: write `tests/unit/test_security_headers.py` asserting `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and (simulated HTTPS) `Strict-Transport-Security` are present on a representative response (security-hardening spec: security response headers).
-- [ ] 9.4 GREEN: implement `src/app/infrastructure/api/middleware.py` (security-headers middleware) and register it in `main.py` — make 9.3 pass.
-- [ ] 9.5 RED: write `tests/unit/test_cors.py` asserting an allow-listed origin receives CORS headers, a non-allow-listed origin does not, and credentials are never permitted for an unlisted origin (security-hardening spec: strict CORS policy, both scenarios).
-- [ ] 9.6 GREEN: configure `CORSMiddleware` in `main.py` from a new `Settings.cors_allowed_origins` list — make 9.5 pass.
-- [ ] 9.7 RED: write `tests/unit/test_rate_limit.py` asserting requests within the configured window succeed and exceeding it on `/api/v1/auth/login` returns 429 (security-hardening spec: rate limiting, both scenarios).
-- [ ] 9.8 GREEN: wire `slowapi`'s limiter on `/api/v1/auth/register|login|refresh` with a configurable window/limit in `Settings` — make 9.7 pass.
-- [ ] 9.9 Closing: run the full local gate (`uv run pytest --cov-fail-under=75` + lint/type gates). Update `README.md` (security section: headers, CORS, rate limits) / `DECISION_LOG.md`. Commit as work units (`feat(security): add security response headers and CORS allow-list`, `feat(security): rate-limit auth endpoints`). Open PR `feature/security-hardening → develop`.
+- [x] 9.1 Branch `feature/security-hardening` off `develop` (after Phase 8's PR merges). Phases 9–11 are the first candidates to cut per the proposal's pending-if-time-runs-out order (Sentry → scanners → hardening); if time is short, cut Phase 11 first, then Phase 10, then this phase, and record each cut in `DECISION_LOG.md` as pending rather than silently skipping it.
+- [x] 9.2 Context7 check: confirm the current `slowapi` rate-limiter integration pattern with FastAPI/Starlette before wiring it. (Library facts pre-verified by the orchestrator via Context7 and relayed in the apply prompt: `Limiter(key_func=get_remote_address, enabled=...)`, decorator-above-`@limiter.limit` ordering, `request: Request` param requirement, `limiter.reset()` for test isolation. Confirmed empirically against the installed `slowapi==0.1.10`/`limits==5.8.0` by reading `Limiter.limit`/`__limit_decorator`/`SlowAPIMiddleware` source directly — see Deviations/DECISION_LOG for the `SlowAPIMiddleware` finding.)
+- [x] 9.3 RED: write `tests/unit/test_security_headers.py` asserting `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and (simulated HTTPS) `Strict-Transport-Security` are present on a representative response (security-hardening spec: security response headers).
+- [x] 9.4 GREEN: implement `src/app/infrastructure/api/middleware.py` (security-headers middleware) and register it in `main.py` — make 9.3 pass.
+- [x] 9.5 RED: write `tests/unit/test_cors.py` asserting an allow-listed origin receives CORS headers, a non-allow-listed origin does not, and credentials are never permitted for an unlisted origin (security-hardening spec: strict CORS policy, both scenarios).
+- [x] 9.6 GREEN: configure `CORSMiddleware` in `main.py` from a new `Settings.cors_allowed_origins` list — make 9.5 pass.
+- [x] 9.7 RED: write `tests/unit/test_rate_limit.py` asserting requests within the configured window succeed and exceeding it on `/api/v1/auth/login` returns 429 (security-hardening spec: rate limiting, both scenarios).
+- [x] 9.8 GREEN: wire `slowapi`'s limiter on `/api/v1/auth/register|login|refresh` with a configurable window/limit in `Settings` — make 9.7 pass.
+- [x] 9.9 Closing: run the full local gate (`uv run pytest --cov-fail-under=75` + lint/type gates). Update `README.md` (security section: headers, CORS, rate limits) / `DECISION_LOG.md`. Commit as work units (`feat(security): add security response headers and CORS allow-list`, `feat(security): rate-limit auth endpoints`). Open PR `feature/security-hardening → develop`.
 
 ## Phase 10: CI Security Scanning — Slice 6b (`feature/security-ci-scanners`, PR 11)
 
