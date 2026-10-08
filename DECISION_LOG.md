@@ -232,3 +232,55 @@ they land in code, not as a batch at the end.
   `CreateTask.execute` in the first place at this layer. This mirrors how
   `email` format validation works in the auth slices (`EmailStr` at the
   boundary, not re-validated in the domain).
+
+## Tasks API Slice (Phase 6 / Slice 3b) Notes
+
+- `assignee_id` ships now (migration `0003_tasks`, `TaskModel.assignee_id`)
+  even though the assignment use cases land in Phase 8, per design ADR-08,
+  so Phase 8 needs no further schema change: `UUID NULL FK users(id) ON
+  DELETE SET NULL`.
+- **Discovered CHECK-constraint naming gotcha** (SQLAlchemy, confirmed
+  empirically against real Postgres 16): under `MetaData`'s
+  `naming_convention` (`db/base.py`), an explicitly-named `CheckConstraint`
+  still has the `"ck"` convention template applied to it, substituting the
+  *given* name as the `%(constraint_name)s` token — unlike
+  `UniqueConstraint`/`ForeignKeyConstraint`/`Index`, where an explicit name
+  bypasses the convention entirely. Passing an already-prefixed name (e.g.
+  `name="ck_tasks_status"`) therefore produces a doubled
+  `ck_tasks_ck_tasks_status` constraint in the actual DB. `versions/0003_tasks.py`
+  and `TaskModel.__table_args__` pass the bare token (`name="status"`,
+  `name="priority"`, `name="title_not_blank"`) instead, consistent with how
+  `TaskModel`'s `sa.Enum(..., name="status")` already worked correctly.
+  Verified via
+  `tests/integration/test_task_repository.py::test_status_check_constraint_rejects_invalid_value`
+  and `::test_priority_check_constraint_rejects_invalid_value`, which bypass
+  the ORM/domain entirely with a raw `INSERT` to prove the DB-level CHECK
+  is the backstop.
+  - **Pre-existing, out-of-scope finding**: `0002_task_lists.py`'s
+    `ck_task_lists_name_not_blank` (Phase 4, already merged) has this exact
+    same doubling in the real DB (`ck_task_lists_ck_task_lists_name_not_blank`),
+    since it was also given an already-prefixed name under the same naming
+    convention. This is harmless in practice — the domain layer already
+    rejects a blank `name` before any INSERT is attempted, so the
+    constraint's exact name only matters for a direct-SQL bypass, and the
+    CHECK itself still fires correctly regardless of its name — but it is
+    flagged here rather than silently fixed on this branch, since
+    `0002_task_lists.py` belongs to an already-merged, out-of-scope PR.
+- `priority` has no default specified anywhere in the spec, design, or
+  proposal. This slice fills that gap with `Priority.MEDIUM` as the
+  `CreateTaskRequest` schema default when the field is omitted — every
+  spec scenario for creation supplies `priority` explicitly, so this
+  default never contradicts a documented scenario; it is a product-gap
+  decision made here, not a design deviation.
+- `SqlAlchemyUnitOfWork`'s `_CONSTRAINT_ERRORS` map is intentionally
+  unchanged by this slice: no new *unique* constraint needs a friendly
+  domain-error translation (the task table's new FKs and CHECKs are not in
+  the map), and task 6.7's regression test
+  (`test_unmapped_constraint_violation_is_re_raised_unmodified`) confirms
+  an unmapped constraint violation (`fk_tasks_list_id_task_lists`)
+  propagates as the raw `IntegrityError`, never silently swallowed.
+- `tests/integration/test_tasks_flow.py`'s end-to-end flow test was not
+  written against a confirmed-failing implementation (no RED observed) —
+  the same honest "combined cycle" deviation documented for every prior
+  slice's integration flow test: it passed on first run against real
+  Postgres; no prior failing run was discarded.

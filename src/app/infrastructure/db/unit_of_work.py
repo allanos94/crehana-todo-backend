@@ -15,6 +15,7 @@ from app.domain.exceptions import (
 )
 from app.infrastructure.db.repositories import (
     SqlAlchemyTaskListRepository,
+    SqlAlchemyTaskRepository,
     SqlAlchemyUserRepository,
 )
 
@@ -39,6 +40,7 @@ class SqlAlchemyUnitOfWork:
         self.task_lists: SqlAlchemyTaskListRepository = SqlAlchemyTaskListRepository(
             self._session
         )
+        self.tasks: SqlAlchemyTaskRepository = SqlAlchemyTaskRepository(self._session)
         return self
 
     async def __aexit__(

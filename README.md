@@ -68,7 +68,7 @@ curl -s -X PATCH http://localhost:8000/api/v1/lists/<list_id> \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -d '{"name": "Shopping"}'
 
-# Delete (cascades its tasks once Phase 5 ships)
+# Delete (cascades its tasks at the DB level)
 curl -s -X DELETE http://localhost:8000/api/v1/lists/<list_id> \
   -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
@@ -80,6 +80,50 @@ case-insensitively (`Groceries` and `groceries` conflict for the same
 owner, but not across different owners) — a conflict returns 409
 `task_list_name_conflict`. A list owned by another user, or a nonexistent
 list, both return 404 — never 403 — so ownership can never be probed.
+
+## Tasks
+
+Every request below requires `Authorization: Bearer <access_token>`.
+Filters, pagination, `completion_percentage`, and the assignee path are not
+implemented yet (Phases 7-8); this section covers CRUD and status changes.
+
+```bash
+# Create a task (priority defaults to "medium" when omitted)
+curl -s -X POST http://localhost:8000/api/v1/lists/<list_id>/tasks \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"title": "Buy milk", "priority": "low", "due_date": "2026-12-31"}'
+
+# Get one task
+curl -s http://localhost:8000/api/v1/lists/<list_id>/tasks/<task_id> \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# Update (partial; omitted fields are untouched)
+curl -s -X PATCH http://localhost:8000/api/v1/lists/<list_id>/tasks/<task_id> \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"title": "Buy oat milk"}'
+
+# Change status (strict state machine; same-status and pending<->done are 409)
+curl -s -X PATCH http://localhost:8000/api/v1/lists/<list_id>/tasks/<task_id>/status \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"status": "in_progress"}'
+
+# Delete
+curl -s -X DELETE http://localhost:8000/api/v1/lists/<list_id>/tasks/<task_id> \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+`title` must be non-blank after trimming and at most 200 characters;
+`description` is optional and at most 2000 characters. `priority` is one of
+`low`, `medium`, `high`. `due_date` is an optional calendar date that must
+not be earlier than today (UTC); it is re-validated only when a `PATCH`
+actually touches it. The status state machine only allows
+`pending -> in_progress`, `in_progress -> pending`, `in_progress -> done`,
+and `done -> in_progress`; every other transition, including a same-status
+request, returns 409 `invalid_status_transition`. A task in another user's
+list, or a nonexistent task, both return 404 — never 403.
 
 ## Architecture
 
