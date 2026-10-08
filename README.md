@@ -264,14 +264,40 @@ pushes to `develop`/`main`.
 
 ## Security
 
-Scaffolded here; hardened in slice 6a (`feature/security-hardening`) and
-slice 6b (`feature/security-ci-scanners`):
+Defense-in-depth layers on top of the core API, added across slices 6a-6c:
 
-- Security response headers (`X-Content-Type-Options`, `X-Frame-Options`,
-  `Strict-Transport-Security`).
-- Strict CORS allow-list.
-- Rate limiting on authentication endpoints.
-- CI security scanning (bandit, pip-audit, gitleaks, CodeQL, Dependabot).
-- Optional Sentry integration gated on `SENTRY_DSN`.
+- **Security response headers** (`src/app/infrastructure/api/middleware.py`):
+  every response gets `X-Content-Type-Options: nosniff`, `X-Frame-Options:
+  DENY`, and `Referrer-Policy: no-referrer`. `Strict-Transport-Security` is
+  added only when the request is HTTPS (directly, or via a trusted
+  `X-Forwarded-Proto: https` header from a reverse proxy). `X-Frame-Options`
+  is used instead of a `Content-Security-Policy` frame directive so Swagger
+  UI at `/docs` keeps working without a CSP exemption list.
+- **Strict CORS allow-list**: `Settings.cors_allowed_origins` (env var
+  `CORS_ALLOWED_ORIGINS`, a JSON array, empty by default) feeds
+  `CORSMiddleware`. An origin absent from the list never receives
+  `Access-Control-Allow-Origin`, so credentialed cross-origin requests from
+  unlisted origins are rejected by the browser.
+- **Rate limiting on auth endpoints** (`slowapi`): `POST /auth/register`,
+  `/auth/login`, and `/auth/refresh` are limited to `Settings.auth_rate_limit`
+  (env var `AUTH_RATE_LIMIT`, default `10/minute`) per client IP. Limiting is
+  off by default (`RATE_LIMIT_ENABLED=false`) so local development and the
+  test suite are never throttled by accident; the compose stack turns it on
+  (`RATE_LIMIT_ENABLED=true`). Exceeding the limit returns 429 with the same
+  error contract as every other error (`{"code": "rate_limited", "message":
+  ...}`) plus a `Retry-After` header.
+
+  ```bash
+  for i in $(seq 1 12); do
+    curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8000/api/v1/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{"email":"nobody@example.com","password":"Passw0rd1"}'
+  done
+  # first 10 -> 401 (bad credentials), remaining -> 429 (rate_limited)
+  ```
+- **CI security scanning** (slice 6b, `feature/security-ci-scanners`):
+  `bandit`, `pip-audit`, `gitleaks`, GitHub CodeQL, and Dependabot.
+- **Optional Sentry integration** (slice 6c, `feature/sentry-integration`):
+  gated entirely on `SENTRY_DSN`; initialized with `send_default_pii=False`.
 
 See `DECISION_LOG.md` for the full rationale behind these and other choices.
