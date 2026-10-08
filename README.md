@@ -29,6 +29,66 @@ Alembic, PostgreSQL 16, Pydantic v2 / pydantic-settings, PyJWT, `pwdlib`
 (Argon2), `slowapi`, `uv` (package manager + `uv_build` backend), pytest +
 Testcontainers, black / isort / flake8 / mypy --strict.
 
+## Documentation
+
+- [`docs/how-it-works.md`](docs/how-it-works.md) — a 10-minute functional
+  walkthrough: user journey, architecture, request flow, business rules,
+  permissions, auth, and the error contract, with diagrams.
+- [`docs/diagrams/`](docs/diagrams/) — the architecture, request-flow,
+  state-machine, and permissions diagrams (source + PNG/SVG).
+
+## Prerequisites by operating system
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| **Docker** | Docker Engine + the Compose plugin | Docker Desktop | Docker Desktop (WSL 2 backend) |
+| **uv** (optional — only to run without Docker, or to run tests) | standalone installer | standalone installer, or Homebrew | PowerShell installer, or winget |
+| **git** | required | required | required |
+| **jq** | optional (pretty-prints curl output) | optional | optional |
+
+`uv` downloads Python 3.12 automatically if it's missing, so no separate
+Python install is required. Current install commands (from
+[docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/)):
+
+```bash
+# macOS / Linux — standalone installer
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# macOS — Homebrew (optional alternative)
+brew install uv
+```
+
+```powershell
+# Windows — PowerShell installer
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Windows — winget (optional alternative)
+winget install --id=astral-sh.uv -e
+```
+
+### Shell differences on Windows
+
+The commands in this README are written for a POSIX shell. On Windows, the
+easiest path is to run them as-is from **Git Bash** or **WSL**. If you're
+using native **PowerShell** instead, a few things differ:
+
+| POSIX (this README) | PowerShell equivalent |
+|---|---|
+| `cp .env.example .env` | `Copy-Item .env.example .env` |
+| `curl ...` | `curl.exe ...` (PowerShell's own `curl` is an alias for `Invoke-WebRequest`, which takes different flags) |
+| `\` line continuation | `` ` `` (backtick) line continuation |
+
+PowerShell-native example of the login request from the
+[Quick start](#quick-start-docker) section:
+
+```powershell
+$body = @{ email = "owner@example.com"; password = "Passw0rd1" } | ConvertTo-Json
+$response = Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8000/api/v1/auth/login" `
+  -ContentType "application/json" -Body $body
+$ACCESS_TOKEN = $response.access_token
+```
+
 ## Quick start (Docker)
 
 ```bash
@@ -177,6 +237,8 @@ All four lint/type checks, plus `uv run pytest`, run in CI
 `develop`/`main`.
 
 ## Architecture
+
+![Architecture diagram](docs/diagrams/01-arquitectura.png)
 
 ```
 src/app/
