@@ -9,11 +9,18 @@ from typing import Self
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.domain.exceptions import EmailAlreadyRegisteredError
-from app.infrastructure.db.repositories import SqlAlchemyUserRepository
+from app.domain.exceptions import (
+    DuplicateTaskListNameError,
+    EmailAlreadyRegisteredError,
+)
+from app.infrastructure.db.repositories import (
+    SqlAlchemyTaskListRepository,
+    SqlAlchemyUserRepository,
+)
 
 _CONSTRAINT_ERRORS: dict[str, type[Exception]] = {
     "uq_users_email": EmailAlreadyRegisteredError,
+    "uq_task_lists_owner_id_lower_name": DuplicateTaskListNameError,
 }
 
 
@@ -29,6 +36,9 @@ class SqlAlchemyUnitOfWork:
         self._session = self._session_factory()
         self._committed = False
         self.users: SqlAlchemyUserRepository = SqlAlchemyUserRepository(self._session)
+        self.task_lists: SqlAlchemyTaskListRepository = SqlAlchemyTaskListRepository(
+            self._session
+        )
         return self
 
     async def __aexit__(
