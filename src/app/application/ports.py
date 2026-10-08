@@ -1,12 +1,15 @@
 """Application ports as `typing.Protocol`s (design ADR-05).
 
 Repository Protocols live in `domain/repositories.py`. This module starts
-with `Clock` and `UnitOfWork`; `PasswordHasher` is added by slice 1b.
-`TokenService` and `NotificationService` are added by later slices (1b, 5).
+with `Clock` and `UnitOfWork`; `PasswordHasher` and `TokenService` are added
+by slice 1b. `NotificationService` is added by slice 5.
 """
 
+from dataclasses import dataclass
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Protocol, Self
+from uuid import UUID
 
 from app.domain.repositories import UserRepository
 
@@ -28,6 +31,33 @@ class PasswordHasher(Protocol):
     async def hash(self, raw: str) -> str: ...
 
     async def verify(self, raw: str, hashed: str) -> bool: ...
+
+
+class TokenType(StrEnum):
+    """The `type` claim carried by every issued JWT (design ADR-11)."""
+
+    ACCESS = "access"
+    REFRESH = "refresh"
+
+
+@dataclass(frozen=True, slots=True)
+class TokenPair:
+    """An issued access/refresh token pair, ready to serialize in a response."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str
+    expires_in: int
+
+
+class TokenService(Protocol):
+    """Issues and decodes HS256 JWT access/refresh token pairs."""
+
+    def issue_pair(self, user_id: UUID) -> TokenPair: ...
+
+    def decode(
+        self, token: str, expected_type: TokenType
+    ) -> UUID: ...  # raises InvalidTokenError
 
 
 class UnitOfWork(Protocol):
