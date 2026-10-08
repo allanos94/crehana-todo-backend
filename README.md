@@ -7,12 +7,41 @@ architecture.
 
 ## Status
 
-Slice 1a (`feature/auth-foundation`). The runnable skeleton, health
-endpoints, Docker/compose stack, and CI/quality gates exist (Phase 0). This
-slice adds the domain exception hierarchy, the `User` entity, the stable
-error contract, the async SQLAlchemy persistence foundation, and the first
-Alembic migration (`0001_users`). Remaining business features land in later
-slices per `openspec/changes/todo-api/tasks.md`.
+Slice 1b (`feature/auth-jwt`). Phase 0 (bootstrap) and Phase 1 (auth
+foundation: exceptions, `User` entity, error contract, persistence) are
+complete. This slice adds Argon2 password hashing, JWT access/refresh
+tokens, and the `register`/`login`/`refresh`/`/users/me` endpoints.
+Remaining business features land in later slices per
+`openspec/changes/todo-api/tasks.md`.
+
+## Authentication
+
+```bash
+# Register
+curl -s -X POST http://localhost:8000/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "user@example.com", "password": "Passw0rd1"}'
+
+# Login (returns an access token and a refresh token)
+curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "user@example.com", "password": "Passw0rd1"}'
+
+# Refresh (exchange a refresh token for a fresh pair)
+curl -s -X POST http://localhost:8000/api/v1/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"refresh_token": "<refresh_token>"}'
+
+# Authenticated identity
+curl -s http://localhost:8000/api/v1/users/me \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Access tokens expire after 15 minutes, refresh tokens after 7 days. Every
+request to `POST /auth/login` with a wrong password or an unknown email
+returns the same 401 message, so a client cannot enumerate registered
+accounts by probing login. See `DECISION_LOG.md` for the JWT/`HTTPBearer`
+rationale and known gaps (no rotation/denylist yet).
 
 ## Architecture
 
