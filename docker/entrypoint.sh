@@ -1,10 +1,9 @@
 #!/bin/sh
 set -e
 
-# Placeholder: `alembic.ini` lands in slice 1a (feature/auth-foundation) with
-# the first migration. Until then, this is a no-op so the image boots clean.
-if [ -f /app/alembic.ini ]; then
-    alembic upgrade head
-fi
+# `alembic.ini` and the first migration (0001_users) landed in slice 1a
+# (feature/auth-foundation); this now always brings the schema to head
+# before the API process starts, safe for the single-replica compose stack.
+alembic upgrade head
 
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000

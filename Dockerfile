@@ -25,10 +25,10 @@ RUN groupadd --system app && useradd --system --gid app --no-create-home app
 WORKDIR /app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
-# Bracket-glob: `alembic.ini` does not exist yet in the bootstrap slice (it
-# lands in slice 1a with the first migration). This copies it once present
-# and is a no-op otherwise, so this Dockerfile does not need to change then.
-COPY --from=builder --chown=app:app /app/alembic.in[i] /app/
+# `alembic.ini` lands at the repo root in slice 1a; migrations themselves
+# ship inside the installed `app` package (script_location is a
+# package-resource path), so no separate COPY is needed for them.
+COPY --from=builder --chown=app:app /app/alembic.ini /app/
 COPY --from=builder --chown=app:app /app/docker/entrypoint.sh /app/docker/entrypoint.sh
 
 ENV PATH="/app/.venv/bin:$PATH"
