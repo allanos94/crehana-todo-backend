@@ -14,8 +14,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       # Medium+ severity only (`-ll`): blocking, since these findings are in
       # our own first-party code and should be fixed before merge, not
       # surfaced-but-ignored.
@@ -27,8 +27,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv export --frozen --no-hashes > requirements.txt
       # Non-blocking: a transitive dependency vulnerability needs time to
       # triage/patch upstream and should not block every PR the moment a
@@ -42,10 +42,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # GITLEAKS_LICENSE is only required for GitHub Organizations;
@@ -57,7 +57,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -t crehana-todo-api:security-scan .
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -77,9 +77,9 @@ jobs:
     env:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: env.SNYK_TOKEN != ''
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v7
         if: env.SNYK_TOKEN != ''
       - run: uv export --frozen --no-hashes > requirements.txt
         if: env.SNYK_TOKEN != ''
@@ -106,7 +106,7 @@ jobs:
   #   permissions:
   #     contents: read
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v7
   #     - uses: fluidattacks/<official-action>@<pinned-version>
   #       with:
   #         token: ${{ secrets.FLUID_ATTACKS_TOKEN }}
