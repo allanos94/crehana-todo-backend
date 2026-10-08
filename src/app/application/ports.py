@@ -28,6 +28,11 @@ class PasswordHasher(Protocol):
     """Hashes and verifies passwords. Async because Argon2 is deliberately
     CPU-heavy (~50ms) and the adapter offloads it with `asyncio.to_thread`."""
 
+    #: A fixed hash with no matching plaintext, so `LoginUser` can run a real
+    #: `verify()` call against an unknown email without ever hashing a value
+    #: that was never submitted — equalizing timing with a wrong password.
+    dummy_hash: str
+
     async def hash(self, raw: str) -> str: ...
 
     async def verify(self, raw: str, hashed: str) -> bool: ...

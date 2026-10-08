@@ -107,3 +107,19 @@ they land in code, not as a batch at the end.
     uses a `Clock` fixed to a date in the past, so `exp` is in the past too.
 - All business routers mount under `/api/v1` (already a confirmed decision,
   design ADR-01); `auth`/`users` routers follow the same prefix.
+- `HTTPBearer(auto_error=False)` was used over `OAuth2PasswordBearer` (design
+  ADR-11 alternative): `OAuth2PasswordBearer` forces a form-encoded login
+  with a `username` field, while `HTTPBearer` still gives `/docs` an
+  "Authorize" box where a pasted token works, and `auto_error=False` lets
+  `get_current_user_id` distinguish "no header" (`NotAuthenticatedError`)
+  from "bad header" (`InvalidTokenError`).
+- RS256 was rejected (design ADR-11 alternative): there is a single service
+  and no key-distribution need, so HS256 with a shared secret is simpler.
+- Refresh-token rotation and a revocation denylist are explicitly **not**
+  implemented in this slice (tracked in the Pending/Deferred table below).
+  `jti` is already included in every token's claims so a future denylist
+  has something to key on without another migration.
+- `WWW-Authenticate: Bearer` is added to every `AuthenticationError`
+  response (401) via `infrastructure/api/errors.py`, beyond the "nice to
+  have" note in the task — the change was a one-line conditional in the
+  existing handler, so there was no reason to skip it.

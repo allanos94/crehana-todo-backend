@@ -10,6 +10,8 @@ from datetime import date, datetime
 from typing import Self
 from uuid import UUID
 
+from app.application.exceptions import InvalidTokenError
+from app.application.ports import TokenPair, TokenType
 from app.domain.user import User
 
 
@@ -52,6 +54,40 @@ class FakeUnitOfWork:
 
     async def commit(self) -> None:
         self.committed = True
+
+
+class FakePasswordHasher:
+    """A `PasswordHasher` double with no real crypto: `"hashed:" + raw`."""
+
+    dummy_hash = "hashed:__dummy__"
+
+    async def hash(self, raw: str) -> str:
+        return f"hashed:{raw}"
+
+    async def verify(self, raw: str, hashed: str) -> bool:
+        return hashed == f"hashed:{raw}"
+
+
+class FakeTokenService:
+    """A deterministic `TokenService` double: tokens are `"{type}:{user_id}"`."""
+
+    def __init__(self) -> None:
+        self.issued_for: list[UUID] = []
+
+    def issue_pair(self, user_id: UUID) -> TokenPair:
+        self.issued_for.append(user_id)
+        return TokenPair(
+            access_token=f"access:{user_id}",
+            refresh_token=f"refresh:{user_id}",
+            token_type="bearer",
+            expires_in=900,
+        )
+
+    def decode(self, token: str, expected_type: TokenType) -> UUID:
+        prefix, separator, raw_id = token.partition(":")
+        if not separator or prefix != expected_type.value:
+            raise InvalidTokenError()
+        return UUID(raw_id)
 
 
 class FixedClock:

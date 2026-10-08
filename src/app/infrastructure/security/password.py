@@ -21,6 +21,8 @@ DUMMY_HASH = _password_hash.hash("not-a-real-password-used-only-for-timing")
 class Argon2PasswordHasher:
     """`PasswordHasher` adapter backed by `pwdlib`'s Argon2 implementation."""
 
+    dummy_hash = DUMMY_HASH
+
     async def hash(self, raw: str) -> str:
         return await asyncio.to_thread(_password_hash.hash, raw)
 
