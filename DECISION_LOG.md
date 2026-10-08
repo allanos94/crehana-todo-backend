@@ -123,3 +123,26 @@ they land in code, not as a batch at the end.
   response (401) via `infrastructure/api/errors.py`, beyond the "nice to
   have" note in the task — the change was a one-line conditional in the
   existing handler, so there was no reason to skip it.
+
+## Task Lists Core Slice (Phase 3 / Slice 2a) Notes
+
+- Per-owner, case-insensitive `TaskList` name uniqueness is enforced in the
+  application layer (`_ensure_name_available`, shared by `CreateTaskList`
+  and `UpdateTaskList`), not in the router — this is a confirmed design
+  position (ADR-06/ADR-07), and slice 2b's functional unique index backs it
+  for race safety under concurrency.
+- Renaming excludes the list's own id from the uniqueness check
+  (`UpdateTaskList` normalizes via `task_list.rename(...)` first, then
+  checks `name_exists(..., exclude_id=task_list.id)`), so renaming `Work`
+  to `work` succeeds.
+- `AccessPolicy` (`application/authorization.py`) is the single place that
+  resolves owner/non-owner/missing-resource into either the entity or
+  `TaskListNotFoundError` (404) — a stranger and a missing list are
+  indistinguishable to the caller, never 403, per the task-lists spec.
+- `UnitOfWork.task_lists` and `FakeUnitOfWork`'s rollback snapshot were
+  extended from a single-repository tuple to a two-repository tuple; the
+  auth use cases/tests needed no changes because `FakeUnitOfWork()` still
+  default-constructs both repositories.
+- No DB/API surface exists yet for task lists (fakes-only, per the 2a/2b
+  split) — `tests/integration/*` and the HTTP router land in Phase 4
+  (slice 2b).

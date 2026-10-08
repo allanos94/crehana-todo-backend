@@ -1,6 +1,6 @@
 """In-memory fakes for unit-testing the application layer without a real DB
-or I/O (design ADR-14). Extended by later slices with task-list/task
-repositories, a password hasher fake, and a recording notifier.
+or I/O (design ADR-14). Extended by later slices with task repositories, a
+password hasher fake, and a recording notifier.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from uuid import UUID
 
 from app.application.exceptions import InvalidTokenError
 from app.application.ports import TokenPair, TokenType
+from app.domain.task_list import TaskList
 from app.domain.user import User
 
 
@@ -33,23 +34,71 @@ class InMemoryUserRepository:
         )
 
 
+class InMemoryTaskListRepository:
+    """A plain in-memory store enforcing case-insensitive per-owner
+    uniqueness through `name_exists`, mirroring the real functional unique
+    index (`uq_task_lists_owner_id_lower_name`, shipped in slice 2b)."""
+
+    def __init__(self) -> None:
+        self._by_id: dict[UUID, TaskList] = {}
+
+    async def add(self, task_list: TaskList) -> None:
+        self._by_id[task_list.id] = task_list
+
+    async def update(self, task_list: TaskList) -> None:
+        self._by_id[task_list.id] = task_list
+
+    async def get(self, list_id: UUID) -> TaskList | None:
+        return self._by_id.get(list_id)
+
+    async def list_by_owner(self, owner_id: UUID) -> list[TaskList]:
+        return [
+            task_list
+            for task_list in self._by_id.values()
+            if task_list.owner_id == owner_id
+        ]
+
+    async def name_exists(
+        self, owner_id: UUID, name: str, exclude_id: UUID | None = None
+    ) -> bool:
+        lowered = name.lower()
+        return any(
+            task_list.owner_id == owner_id
+            and task_list.name.lower() == lowered
+            and task_list.id != exclude_id
+            for task_list in self._by_id.values()
+        )
+
+    async def delete(self, list_id: UUID) -> None:
+        self._by_id.pop(list_id, None)
+
+
 class FakeUnitOfWork:
     """Fake `UnitOfWork`: a `committed` flag, and rollback restores a snapshot
     of the repositories taken when the transaction opened."""
 
-    def __init__(self, users: InMemoryUserRepository | None = None) -> None:
+    def __init__(
+        self,
+        users: InMemoryUserRepository | None = None,
+        task_lists: InMemoryTaskListRepository | None = None,
+    ) -> None:
         self.users = users if users is not None else InMemoryUserRepository()
+        self.task_lists = (
+            task_lists if task_lists is not None else InMemoryTaskListRepository()
+        )
         self.committed = False
-        self._snapshot: InMemoryUserRepository | None = None
+        self._snapshot: (
+            tuple[InMemoryUserRepository, InMemoryTaskListRepository] | None
+        ) = None
 
     async def __aenter__(self) -> Self:
         self.committed = False
-        self._snapshot = copy.deepcopy(self.users)
+        self._snapshot = (copy.deepcopy(self.users), copy.deepcopy(self.task_lists))
         return self
 
     async def __aexit__(self, *exc: object) -> None:
         if not self.committed and self._snapshot is not None:
-            self.users = self._snapshot
+            self.users, self.task_lists = self._snapshot
         self._snapshot = None
 
     async def commit(self) -> None:

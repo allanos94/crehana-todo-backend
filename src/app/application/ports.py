@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Protocol, Self
 from uuid import UUID
 
-from app.domain.repositories import UserRepository
+from app.domain.repositories import TaskListRepository, UserRepository
 
 
 class Clock(Protocol):
@@ -69,6 +69,7 @@ class UnitOfWork(Protocol):
     """Owns one transaction, one `AsyncSession`, and the repositories on it."""
 
     users: UserRepository
+    task_lists: TaskListRepository
 
     async def __aenter__(self) -> Self: ...
 
