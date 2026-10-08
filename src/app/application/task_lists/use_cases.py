@@ -15,7 +15,7 @@ from app.application.task_lists.dto import (
     ListTaskListsCommand,
     UpdateTaskListCommand,
 )
-from app.domain.exceptions import DuplicateTaskListNameError
+from app.domain.exceptions import DuplicateTaskListNameError, InvalidFieldError
 from app.domain.task_list import TaskList
 
 
@@ -93,6 +93,8 @@ class UpdateTaskList:
             task_list = await policy.owned_list(command.list_id, command.actor_id)
             now = self._clock.now()
             if command.name is not UNSET:
+                if command.name is None:
+                    raise InvalidFieldError("name", "name must not be blank")
                 task_list.rename(command.name, now)
                 await _ensure_name_available(
                     self._uow,

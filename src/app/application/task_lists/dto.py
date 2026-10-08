@@ -33,7 +33,10 @@ class ListTaskListsCommand:
 class UpdateTaskListCommand:
     actor_id: UUID
     list_id: UUID
-    name: str | Unset = UNSET
+    # `name` cannot be cleared (it is a required field): `None` is an
+    # invalid value handled explicitly by `UpdateTaskList`, never confused
+    # with `UNSET` (field omitted from the PATCH body).
+    name: str | None | Unset = UNSET
     description: str | None | Unset = UNSET
 
 

@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from app.infrastructure.api.errors import register_exception_handlers
 from app.infrastructure.api.routers.auth import router as auth_router
 from app.infrastructure.api.routers.health import router as health_router
+from app.infrastructure.api.routers.task_lists import router as task_lists_router
 from app.infrastructure.api.routers.users import router as users_router
 from app.infrastructure.config import get_settings
 from app.infrastructure.db.session import create_engine, create_session_factory
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(users_router)
+    app.include_router(task_lists_router)
     return app
 
 

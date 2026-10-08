@@ -7,12 +7,12 @@ architecture.
 
 ## Status
 
-Slice 1b (`feature/auth-jwt`). Phase 0 (bootstrap) and Phase 1 (auth
-foundation: exceptions, `User` entity, error contract, persistence) are
-complete. This slice adds Argon2 password hashing, JWT access/refresh
-tokens, and the `register`/`login`/`refresh`/`/users/me` endpoints.
-Remaining business features land in later slices per
-`openspec/changes/todo-api/tasks.md`.
+Slice 2b (`feature/task-lists-api`). Phases 0-2 (bootstrap, auth
+foundation, auth JWT) are complete. Phase 3 added the owner-scoped
+`TaskList` domain entity and use cases against fakes; this slice persists
+`TaskList` with SQLAlchemy and exposes the `/api/v1/lists` CRUD endpoints.
+Remaining business features (tasks, filters, assignment, hardening) land
+in later slices per `openspec/changes/todo-api/tasks.md`.
 
 ## Authentication
 
@@ -42,6 +42,44 @@ request to `POST /auth/login` with a wrong password or an unknown email
 returns the same 401 message, so a client cannot enumerate registered
 accounts by probing login. See `DECISION_LOG.md` for the JWT/`HTTPBearer`
 rationale and known gaps (no rotation/denylist yet).
+
+## Task Lists
+
+Every request below requires `Authorization: Bearer <access_token>`.
+
+```bash
+# Create a list
+curl -s -X POST http://localhost:8000/api/v1/lists \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"name": "Groceries", "description": "Weekly shopping"}'
+
+# List your own task lists
+curl -s http://localhost:8000/api/v1/lists \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# Get one task list
+curl -s http://localhost:8000/api/v1/lists/<list_id> \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# Rename / re-describe (partial update; omitted fields are untouched)
+curl -s -X PATCH http://localhost:8000/api/v1/lists/<list_id> \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"name": "Shopping"}'
+
+# Delete (cascades its tasks once Phase 5 ships)
+curl -s -X DELETE http://localhost:8000/api/v1/lists/<list_id> \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+`name` must be non-blank after trimming and at most 120 characters;
+`description` is optional and at most 2000 characters, with a blank value
+normalized to `null`. A list's `name` is unique per owner, compared
+case-insensitively (`Groceries` and `groceries` conflict for the same
+owner, but not across different owners) — a conflict returns 409
+`task_list_name_conflict`. A list owned by another user, or a nonexistent
+list, both return 404 — never 403 — so ownership can never be probed.
 
 ## Architecture
 
