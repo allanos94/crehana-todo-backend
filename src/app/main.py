@@ -5,8 +5,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
 from app.infrastructure.api.errors import register_exception_handlers
+from app.infrastructure.api.middleware import security_headers_middleware
 from app.infrastructure.api.routers.auth import router as auth_router
 from app.infrastructure.api.routers.health import router as health_router
 from app.infrastructure.api.routers.task_lists import router as task_lists_router
@@ -44,7 +46,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Build and configure the FastAPI application instance."""
+    settings = get_settings()
     app = FastAPI(title="Todo Lists API", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.middleware("http")(security_headers_middleware)
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router)
