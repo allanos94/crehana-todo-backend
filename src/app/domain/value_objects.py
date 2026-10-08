@@ -7,6 +7,7 @@ definitions (design ADR-13), keeping the domain the single source of truth.
 """
 
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
 from app.domain.exceptions import (
@@ -100,3 +101,19 @@ def ensure_due_date_not_past(due_date: date | None, today: date) -> None:
     """
     if due_date is not None and due_date < today:
         raise DueDateInPastError()
+
+
+def completion_percentage(done: int, total: int) -> float:
+    """Return `done / total * 100`, rounded to 2 decimals (design ADR-10).
+
+    `total == 0` always yields `0.0` -- there is nothing to divide by, and
+    an empty list is not "0% done" by any meaningful metric. Rounding uses
+    `Decimal` + `ROUND_HALF_UP` so the result is deterministic regardless
+    of binary float representation.
+    """
+    if total == 0:
+        return 0.0
+    quotient = (Decimal(done * 100) / Decimal(total)).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    return float(quotient)

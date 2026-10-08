@@ -13,6 +13,7 @@ from app.domain.value_objects import (
     Priority,
     TaskStatus,
     can_transition,
+    completion_percentage,
     ensure_due_date_not_past,
     normalize_optional_text,
     normalize_required_text,
@@ -116,3 +117,17 @@ def test_ensure_due_date_not_past_accepts_future_date() -> None:
 
 def test_ensure_due_date_not_past_accepts_none() -> None:
     ensure_due_date_not_past(None, date(2026, 10, 7))  # must not raise
+
+
+@pytest.mark.parametrize(
+    ("done", "total", "expected"),
+    [
+        (0, 0, 0.0),
+        (1, 4, 25.00),
+        (1, 3, 33.33),
+        (2, 3, 66.67),
+        (4, 4, 100.00),
+    ],
+)
+def test_completion_percentage(done: int, total: int, expected: float) -> None:
+    assert completion_percentage(done, total) == expected
