@@ -96,16 +96,16 @@ The user has already confirmed, in this session, the gitflow slice/branch/merge-
 
 ## Phase 3: Task Lists Core — Slice 2a (`feature/task-lists-core`, PR 4)
 
-- [ ] 3.1 Branch `feature/task-lists-core` off `develop` (after Phase 2's PR merges).
-- [ ] 3.2 RED: write `tests/unit/test_task_list.py` (`TaskList.create(...)`, `rename()`, `describe()` invariants built on the existing `normalize_required_text`/`normalize_optional_text`) per task-lists spec field-validation scenarios (empty name after trim, name > 120 chars, description > 2000 chars).
-- [ ] 3.3 GREEN: implement `src/app/domain/task_list.py` (`TaskList` slotted dataclass + `create`/`rename`/`describe`); add `NAME_MAX_LENGTH = 120` and `DESCRIPTION_MAX_LENGTH = 2000` constants to `value_objects.py` for API-schema reuse later — make 3.2 pass.
-- [ ] 3.4 Extend `tests/unit/fakes.py` with `InMemoryTaskListRepository`, enforcing case-insensitive per-owner uniqueness and `name_exists(owner_id, name, exclude_id=None)`.
-- [ ] 3.5 RED: write `tests/unit/test_authorization.py::test_owned_list_returns_list_for_owner` and `test_owned_list_raises_not_found_for_non_owner_and_missing` (task-lists spec: non-owner → 404, nonexistent → 404).
-- [ ] 3.6 GREEN: implement `src/app/application/authorization.py` (`AccessPolicy.owned_list`) and `src/app/domain/repositories.py` (`TaskListRepository` Protocol) — make 3.5 pass.
-- [ ] 3.7 RED: write `tests/unit/test_task_list_use_cases.py` covering every task-lists spec scenario against fakes: create success; duplicate name same-case → 409; duplicate different-case → 409; same name across different owners → 201; renaming into a conflicting name → 409; renaming excludes the list's own id; invalid field on update → 422; get/list scoped to owner.
-- [ ] 3.8 GREEN: implement `src/app/application/task_lists/dto.py` (Create/Update/Delete/Get/List commands+results) and `task_lists/use_cases.py` (`CreateTaskList`, `ListTaskLists`, `GetTaskList`, `UpdateTaskList`, `DeleteTaskList`) — make 3.7 pass.
-- [ ] 3.9 REFACTOR: if the "normalize + uniqueness check" sequence shared by `CreateTaskList` and `UpdateTaskList` is duplicated non-trivially, extract a private helper; keep 3.7 green throughout.
-- [ ] 3.10 Closing: run the full local gate (`uv run pytest --cov-fail-under=75` + `black --check`/`isort --check-only`/`flake8`/`mypy --strict`). Update `DECISION_LOG.md` (uniqueness policy lives in the application layer, not the router; self-rename exclusion). Commit as work units (`feat(task-lists): add TaskList domain entity`, `feat(task-lists): add owner-scoped use cases with fakes`). Open PR `feature/task-lists-core → develop`.
+- [x] 3.1 Branch `feature/task-lists-core` off `develop` (after Phase 2's PR merges).
+- [x] 3.2 RED: write `tests/unit/test_task_list.py` (`TaskList.create(...)`, `rename()`, `describe()` invariants built on the existing `normalize_required_text`/`normalize_optional_text`) per task-lists spec field-validation scenarios (empty name after trim, name > 120 chars, description > 2000 chars).
+- [x] 3.3 GREEN: implement `src/app/domain/task_list.py` (`TaskList` slotted dataclass + `create`/`rename`/`describe`); add `NAME_MAX_LENGTH = 120` and `DESCRIPTION_MAX_LENGTH = 2000` constants to `value_objects.py` for API-schema reuse later — make 3.2 pass.
+- [x] 3.4 Extend `tests/unit/fakes.py` with `InMemoryTaskListRepository`, enforcing case-insensitive per-owner uniqueness and `name_exists(owner_id, name, exclude_id=None)`.
+- [x] 3.5 RED: write `tests/unit/test_authorization.py::test_owned_list_returns_list_for_owner` and `test_owned_list_raises_not_found_for_non_owner_and_missing` (task-lists spec: non-owner → 404, nonexistent → 404).
+- [x] 3.6 GREEN: implement `src/app/application/authorization.py` (`AccessPolicy.owned_list`) and `src/app/domain/repositories.py` (`TaskListRepository` Protocol) — make 3.5 pass.
+- [x] 3.7 RED: write `tests/unit/test_task_list_use_cases.py` covering every task-lists spec scenario against fakes: create success; duplicate name same-case → 409; duplicate different-case → 409; same name across different owners → 201; renaming into a conflicting name → 409; renaming excludes the list's own id; invalid field on update → 422; get/list scoped to owner.
+- [x] 3.8 GREEN: implement `src/app/application/task_lists/dto.py` (Create/Update/Delete/Get/List commands+results) and `task_lists/use_cases.py` (`CreateTaskList`, `ListTaskLists`, `GetTaskList`, `UpdateTaskList`, `DeleteTaskList`) — make 3.7 pass.
+- [x] 3.9 REFACTOR: if the "normalize + uniqueness check" sequence shared by `CreateTaskList` and `UpdateTaskList` is duplicated non-trivially, extract a private helper; keep 3.7 green throughout.
+- [x] 3.10 Closing: run the full local gate (`uv run pytest --cov-fail-under=75` + `black --check`/`isort --check-only`/`flake8`/`mypy --strict`). Update `DECISION_LOG.md` (uniqueness policy lives in the application layer, not the router; self-rename exclusion). Commit as work units (`feat(task-lists): add TaskList domain entity`, `feat(task-lists): add owner-scoped use cases with fakes`). Open PR `feature/task-lists-core → develop`.
 
 ## Phase 4: Task Lists API — Slice 2b (`feature/task-lists-api`, PR 5)
 
