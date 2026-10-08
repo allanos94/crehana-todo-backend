@@ -273,11 +273,13 @@ Decisions already captured in Sections A/B are not repeated here.
   silently. It is `continue-on-error: true` regardless.
 - **Fluid Attacks is pending, not implemented, and not faked** — see
   Section D for the full reasoning and the explicit follow-up instruction.
-- Dependabot uses the `pip` ecosystem (not a dedicated `uv` ecosystem
-  value) because whether GitHub's native `uv.lock` Dependabot support
-  applies to this repository's exact configuration could not be verified
-  in this session (same web-access gap as Fluid Attacks) — recorded as a
-  pending confirmation in Section D.
+- Dependabot uses the native `uv` ecosystem, so updates resolve through
+  `uv.lock`. Dependabot version updates support `uv` in general
+  availability since 2025-03-13 and security updates support it as well
+  (https://github.blog/changelog/2025-03-13-dependabot-version-updates-now-support-uv-in-general-availability/,
+  https://docs.astral.sh/uv/guides/integration/dependabot/). The apply
+  session first chose `pip` because it could not verify this; the
+  orchestrator verified it and switched to `uv` in the same PR.
 - Verification for this slice was static (actionlint + YAML parse + local
   `bandit`/`pip-audit` runs), not a live GitHub Actions run — pushing
   branches and observing CI runs was reserved for the orchestrator in this
@@ -308,6 +310,5 @@ Decisions already captured in Sections A/B are not repeated here.
 | Shared lists / collaboration (multiple owners or members of a list) | Out of scope | Only the single-assignee middle ground (Section B, #3) is provided |
 | Real email delivery (SMTP or a provider) | Out of scope by design | Console/log notifier only — the challenge explicitly asks for a *fake* invitation |
 | Fluid Attacks CI integration | Pending | No primary-source-verified free/open-source invocation could be confirmed (no web-research tool available in the apply sessions that worked on `security.yml`). A commented-out job stub in `security.yml` marks where an official pinned Docker image or GitHub Action would plug in. **Follow-up**: whoever next has web access should confirm the current free-tier invocation from `docs.fluidattacks.com`/`github.com/fluidattacks` and either complete the stub or explicitly drop it with rationale recorded here |
-| Dependabot's `pip`-vs-`uv` ecosystem choice for `uv.lock` | Pending confirmation | Currently configured as `pip`; GitHub's native `uv` ecosystem support for Dependabot could not be verified against this repository's exact setup without web access — revisit once that can be confirmed |
 | Cosmetic doubled CHECK-constraint name on `task_lists` | Known, not fixed | The real database name is `ck_task_lists_ck_task_lists_name_not_blank` (verified by reading `versions/0002_task_lists.py`: an already-prefixed `name="ck_task_lists_name_not_blank"` gets the naming convention's `"ck"` template applied again). Harmless — the domain layer rejects a blank name before any `INSERT` — and left alone because the migration that introduced it belongs to an already-merged, out-of-scope PR (Phase 4). See Section C, Phase 6, for the full discovery and the fix applied going forward in `0003_tasks.py` |
 | Idempotent same-status transition | Considered and rejected, not pending | Noted here for completeness: an idempotent 200-with-no-change response for a same-status `PATCH .../status` was explicitly considered during Phase 5 and rejected in favor of treating it as any other invalid transition (409) — see Section B, #9 |

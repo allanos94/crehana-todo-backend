@@ -282,7 +282,7 @@ Defense-in-depth layers on top of the core API:
   - GitHub CodeQL (Python, weekly + every push/PR) — free on public repos.
   - Snyk — optional, gated entirely on a `SNYK_TOKEN` secret; a no-op
     without one, non-blocking when it runs.
-  - Dependabot: weekly updates for the `pip`, `github-actions`, and
+  - Dependabot: weekly updates for `uv` (resolves `uv.lock` natively), `github-actions`, and
     `docker` ecosystems, targeting `develop`.
   - **Fluid Attacks: pending** — no primary-source-verified free/open-source
     invocation could be confirmed in the apply session (no web-research
