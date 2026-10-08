@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = False
     auth_rate_limit: str = "10/minute"
 
+    #: Optional Sentry error tracking (security-hardening spec), gated
+    #: entirely on this being set. `None` by default: no DSN, no init, no
+    #: data ever leaves the process.
+    sentry_dsn: str | None = None
+    sentry_traces_sample_rate: float = 0.0
+    environment: str = "development"
+
 
 @lru_cache
 def get_settings() -> Settings:
