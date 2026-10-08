@@ -193,11 +193,11 @@ The user has already confirmed, in this session, the gitflow slice/branch/merge-
 
 ## Phase 11 (optional, first to cut): Sentry Integration — Slice 6c (`feature/sentry-integration`, PR 12)
 
-- [ ] 11.1 Branch `feature/sentry-integration` off `develop` (after Phase 10's PR merges). This is the first item cut under time pressure per the proposal; if cut, skip to Phase 12 and record the cut in `DECISION_LOG.md` as pending — do not silently omit it.
-- [ ] 11.2 Context7 check: confirm the current `sentry-sdk` FastAPI integration pattern and the `send_default_pii` default/override syntax.
-- [ ] 11.3 RED: write `tests/unit/test_sentry.py` asserting Sentry init is skipped entirely when `SENTRY_DSN` is unset, and that when set, `send_default_pii=False` is passed to `sentry_sdk.init()` (security-hardening spec: optional error-tracking integration, both scenarios) — assert via a monkeypatched `sentry_sdk.init` call-spy, never a real network call.
-- [ ] 11.4 GREEN: add gated Sentry initialization to `src/app/main.py`'s startup, reading a new `Settings.sentry_dsn: str | None` — make 11.3 pass.
-- [ ] 11.5 Closing: run the full local gate (`uv run pytest --cov-fail-under=75` + lint/type gates). Update `README.md` (optional `SENTRY_DSN` env var) / `DECISION_LOG.md`. Commit (`feat(observability): add optional Sentry integration gated on SENTRY_DSN`). Open PR `feature/sentry-integration → develop`.
+- [x] 11.1 Branched `feature/sentry-integration` off `feature/security-ci-scanners`@`dc7b180` instead of `develop` (stacked locally — Phase 10's PR has not merged yet in this session; the PR for this slice targets `feature/security-ci-scanners` and can open as soon as PR 11 merges, matching every prior stacked-pair precedent). Not cut — time/scope allowed completing it.
+- [x] 11.2 Context7 check: confirm the current `sentry-sdk` FastAPI integration pattern and the `send_default_pii` default/override syntax. (Library facts pre-verified by the orchestrator via Context7 and relayed in the apply prompt: FastAPI integration auto-enables when `fastapi` is installed; init as early as possible only when `Settings.sentry_dsn` is set; `send_default_pii=False`, `traces_sample_rate` default `0.0`, `environment` from settings. Installed `sentry-sdk==2.71.0` via `uv add "sentry-sdk[fastapi]"`.)
+- [x] 11.3 RED: write `tests/unit/test_sentry.py` asserting Sentry init is skipped entirely when `SENTRY_DSN` is unset, and that when set, `send_default_pii=False` is passed to `sentry_sdk.init()` (security-hardening spec: optional error-tracking integration, both scenarios) — assert via a monkeypatched `sentry_sdk.init` call-spy, never a real network call.
+- [x] 11.4 GREEN: add gated Sentry initialization to `src/app/main.py`'s startup, reading a new `Settings.sentry_dsn: str | None` — make 11.3 pass.
+- [x] 11.5 Closing: run the full local gate (`uv run pytest` — 286 passed, coverage 94.11% ≥75%; `black`/`isort`/`flake8`/`mypy --strict` all clean; `uv lock --check` clean). Update `README.md` (optional `SENTRY_DSN` env var) / `DECISION_LOG.md`. Commit (`feat(observability): add optional Sentry integration gated on SENTRY_DSN`). No PR opened (orchestrator delivers PRs).
 
 ## Phase 12: Release
 

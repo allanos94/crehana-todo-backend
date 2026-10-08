@@ -534,3 +534,34 @@ they land in code, not as a batch at the end.
   reading `pyproject.toml` constraints. Sources:
   https://github.blog/changelog/2025-03-13-dependabot-version-updates-now-support-uv-in-general-availability/
   and https://docs.astral.sh/uv/guides/integration/dependabot/
+
+## Phase 11: Sentry Integration (slice 6c, `feature/sentry-integration`)
+
+- **Not cut.** The proposal names this slice the first candidate to cut
+  under time pressure; this session had the time/scope to complete it, so
+  it was implemented rather than skipped.
+- **`init_sentry()` lives in its own module**
+  (`infrastructure/observability/sentry.py`) rather than inline in
+  `main.py`, purely so the monkeypatch-spy test can target
+  `sentry_sdk.init` directly without needing to reach into `main`'s module
+  namespace or restructure `create_app()`/`lifespan`.
+- **Called at module import time in `main.py`, before `create_app()`**, not
+  inside the `lifespan` context manager. Sentry's own guidance is to
+  initialize "as early as possible"; doing it inside `lifespan` would only
+  run once ASGI startup actually begins, missing anything that could go
+  wrong during app construction itself (router registration, middleware
+  wiring). `logging.basicConfig(...)` (Phase 8's fix) still runs first, so
+  the ordering between the two is preserved.
+- **No test asserts against a real Sentry endpoint.** Both tests in
+  `tests/unit/test_sentry.py` monkeypatch `sentry_sdk.init` with a
+  call-recording lambda and inspect the captured kwargs — exactly the
+  "assert via a monkeypatched `sentry_sdk.init` call-spy, never a real
+  network call" requirement from the task. The FastAPI integration's
+  auto-enablement (triggered merely by `fastapi` being importable, which
+  it always is in this project) is not separately re-verified here: it is
+  `sentry-sdk`'s own tested behavior, not application code.
+- **`sentry_traces_sample_rate` defaults to `0.0`** (performance tracing
+  off) and **`environment` defaults to `"development"`** — both
+  configurable via `Settings`/env, matching the orchestrator-provided
+  library facts for this integration exactly (`traces_sample_rate=
+  settings.sentry_traces_sample_rate (default 0.0)`).

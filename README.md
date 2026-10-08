@@ -311,7 +311,16 @@ Defense-in-depth layers on top of the core API, added across slices 6a-6c:
     the full reasoning and the commented stub in `security.yml`.
   - Dependabot: weekly updates for the `uv` (resolves `uv.lock`), `github-actions`, and
     `docker` ecosystems, targeting `develop`.
-- **Optional Sentry integration** (slice 6c, `feature/sentry-integration`):
-  gated entirely on `SENTRY_DSN`; initialized with `send_default_pii=False`.
+- **Optional Sentry integration** (slice 6c,
+  `src/app/infrastructure/observability/sentry.py`): set the `SENTRY_DSN`
+  environment variable to enable error tracking; leaving it unset keeps
+  `init_sentry()` a complete no-op (no import side effect, no network
+  call). When enabled, `sentry_sdk.init(...)` is always called with
+  `send_default_pii=False`, so no personally identifiable information
+  (request bodies, headers, user context, etc.) is sent to Sentry.
+  `SENTRY_TRACES_SAMPLE_RATE` (default `0.0`, i.e. off) and `ENVIRONMENT`
+  (default `development`) are also configurable. The FastAPI integration
+  inside `sentry-sdk` auto-enables itself once `fastapi` is importable, so
+  no extra wiring beyond `init()` is needed.
 
 See `DECISION_LOG.md` for the full rationale behind these and other choices.

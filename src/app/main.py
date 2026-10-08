@@ -17,6 +17,7 @@ from app.infrastructure.api.routers.tasks import router as tasks_router
 from app.infrastructure.api.routers.users import router as users_router
 from app.infrastructure.config import get_settings
 from app.infrastructure.db.session import create_engine, create_session_factory
+from app.infrastructure.observability.sentry import init_sentry
 from app.infrastructure.security.rate_limit import limiter, rate_limit_exceeded_handler
 
 # Python's root logger defaults to WARNING with no handler attached, which
@@ -29,13 +30,17 @@ from app.infrastructure.security.rate_limit import limiter, rate_limit_exceeded_
 # `disable_existing_loggers=False`).
 logging.basicConfig(level=logging.INFO)
 
+# As early as possible in the process, and a no-op unless `SENTRY_DSN` is
+# configured (security-hardening spec: optional error-tracking
+# integration). Deliberately at import time, before `create_app()` builds
+# anything, so Sentry's FastAPI integration can also observe app
+# construction itself, not just request handling.
+init_sentry()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Manage resources that live for the whole application process.
-
-    Slice 6c adds optional Sentry initialization here.
-    """
+    """Manage resources that live for the whole application process."""
     settings = get_settings()
     engine = create_engine(settings.database_url)
     app.state.engine = engine
