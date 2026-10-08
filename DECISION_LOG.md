@@ -78,3 +78,32 @@ they land in code, not as a batch at the end.
   ...` from multiple test modules (pytest's default "prepend" import mode
   needs real packages for dotted cross-module imports); `tests/integration`
   already had its own `__init__.py`.
+
+## Auth JWT Slice (Phase 2 / Slice 1b) Notes
+
+- Context7 check (task 2.2), verified by the orchestrator against installed
+  versions `pwdlib==0.3.1`, `pyjwt==2.15.1`, `fastapi==0.142.4`:
+  - `pwdlib`: `PasswordHash((Argon2Hasher(),))` with `.hash(pw) -> str` and
+    `.verify(pw, hash) -> bool`. Both are CPU-bound/sync, wrapped in
+    `asyncio.to_thread` in `Argon2PasswordHasher`.
+  - PyJWT: `jwt.encode(payload, key, algorithm="HS256")`;
+    `jwt.decode(token, key, algorithms=["HS256"], options={"require": [...]})`.
+    `sub` must be a string (`str(user_id)`); `exp`/`iat` accept aware UTC
+    `datetime` instances directly (PyJWT converts to Unix timestamps,
+    truncating microseconds). Errors: catch the base `jwt.InvalidTokenError`
+    (covers `ExpiredSignatureError`, `MissingRequiredClaimError`, signature
+    and format failures) and map it to the app's `InvalidTokenError`.
+  - FastAPI: `HTTPBearer()` with default `auto_error=True` now returns 401 (not
+    403) with a `WWW-Authenticate: Bearer` header. The design still uses
+    `HTTPBearer(auto_error=False)` so the dependency can distinguish "no
+    header" (`NotAuthenticatedError`) from "bad header"
+    (`InvalidTokenError`), both mapped to 401 by the existing error contract.
+  - Confirmed empirically: PyJWT validates `iat` against the real wall clock
+    regardless of any injected `Clock` used to build the payload — an `iat`
+    in the future raises `ImmatureSignatureError`. `JwtTokenService` still
+    takes all times from the injected `Clock` per design (never
+    `datetime.now()` directly), but `tests/unit/test_jwt.py`'s "valid token"
+    cases issue at the real current time, and only the expired-token case
+    uses a `Clock` fixed to a date in the past, so `exp` is in the past too.
+- All business routers mount under `/api/v1` (already a confirmed decision,
+  design ADR-01); `auth`/`users` routers follow the same prefix.

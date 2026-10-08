@@ -80,12 +80,12 @@ The user has already confirmed, in this session, the gitflow slice/branch/merge-
 
 ## Phase 2: Auth JWT — Slice 1b (`feature/auth-jwt`, PR 3)
 
-- [ ] 2.1 Branch `feature/auth-jwt` off `develop` (after Phase 1's PR merges).
-- [ ] 2.2 Context7 check: confirm the current `pwdlib.PasswordHash((Argon2Hasher(),))` API, PyJWT's `jwt.decode(..., options={"require": [...]})` signature, and FastAPI's current guidance on `HTTPBearer(auto_error=False)` (design ADR-11).
-- [ ] 2.3 RED: write `tests/unit/test_password.py` (hash/verify round trip, wrong password fails, timing-equalized dummy-hash path for unknown emails) against `Argon2PasswordHasher`, not yet implemented.
-- [ ] 2.4 GREEN: implement `src/app/infrastructure/security/password.py` (`Argon2PasswordHasher` via `pwdlib`, `asyncio.to_thread`, module-level dummy hash) and add the `PasswordHasher` Protocol to `application/ports.py` — make 2.3 pass.
-- [ ] 2.5 RED: write `tests/unit/test_jwt.py` (access `exp` = +15 min, refresh `exp` = +7 days, `type` claim round trip, wrong-type rejection, expired-token rejection, tampered-signature rejection — user-auth spec: access/refresh expiry, type-mismatch both directions, expired both kinds).
-- [ ] 2.6 GREEN: implement `src/app/infrastructure/security/jwt.py` (`JwtTokenService.issue_pair`, `.decode(token, expected_type)` raising `InvalidTokenError`) and add `TokenService`/`TokenType`/`TokenPair` to `application/ports.py` — make 2.5 pass.
+- [x] 2.1 Branch `feature/auth-jwt` off `develop` (after Phase 1's PR merges).
+- [x] 2.2 Context7 check: confirm the current `pwdlib.PasswordHash((Argon2Hasher(),))` API, PyJWT's `jwt.decode(..., options={"require": [...]})` signature, and FastAPI's current guidance on `HTTPBearer(auto_error=False)` (design ADR-11).
+- [x] 2.3 RED: write `tests/unit/test_password.py` (hash/verify round trip, wrong password fails, timing-equalized dummy-hash path for unknown emails) against `Argon2PasswordHasher`, not yet implemented.
+- [x] 2.4 GREEN: implement `src/app/infrastructure/security/password.py` (`Argon2PasswordHasher` via `pwdlib`, `asyncio.to_thread`, module-level dummy hash) and add the `PasswordHasher` Protocol to `application/ports.py` — make 2.3 pass.
+- [x] 2.5 RED: write `tests/unit/test_jwt.py` (access `exp` = +15 min, refresh `exp` = +7 days, `type` claim round trip, wrong-type rejection, expired-token rejection, tampered-signature rejection — user-auth spec: access/refresh expiry, type-mismatch both directions, expired both kinds).
+- [x] 2.6 GREEN: implement `src/app/infrastructure/security/jwt.py` (`JwtTokenService.issue_pair`, `.decode(token, expected_type)` raising `InvalidTokenError`) and add `TokenService`/`TokenType`/`TokenPair` to `application/ports.py` — make 2.5 pass.
 - [ ] 2.7 RED: write `tests/unit/test_auth_use_cases.py` against `tests/unit/fakes.py` covering: `RegisterUser` success + duplicate-email → `EmailAlreadyRegisteredError`; `LoginUser` success + wrong-password and unknown-email both → `InvalidCredentialsError` with an identical message; `RefreshTokens` success; `GetCurrentUser` success.
 - [ ] 2.8 GREEN: implement `src/app/application/auth/dto.py` (commands/results) and `auth/use_cases.py` (`RegisterUser`, `LoginUser`, `RefreshTokens`, `GetCurrentUser`) — make 2.7 pass.
 - [ ] 2.9 RED: write `tests/unit/test_auth_api.py` (`ASGITransport` + `dependency_overrides`) covering every user-auth spec scenario at the HTTP layer: register 201 (hash never echoed), duplicate email 409, password-policy violations ×4 → 422, login 200 with tokens, wrong-password/unknown-email → 401 with identical message, refresh 200 with a new access token, refresh-token-as-access and access-token-as-refresh → 401, `GET /users/me` 200 / 401 (no header) / 401 (malformed token).
