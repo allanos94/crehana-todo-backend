@@ -8,15 +8,25 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Request
+from fastapi import BackgroundTasks, Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.application.exceptions import NotAuthenticatedError
-from app.application.ports import Clock, PasswordHasher, TokenService, TokenType
+from app.application.ports import (
+    Clock,
+    NotificationService,
+    PasswordHasher,
+    TokenService,
+    TokenType,
+)
 from app.infrastructure.clock import SystemClock
 from app.infrastructure.config import get_settings
 from app.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+from app.infrastructure.notifications.console import (
+    BackgroundTaskNotifier,
+    ConsoleEmailNotifier,
+)
 from app.infrastructure.security.jwt import JwtTokenService
 from app.infrastructure.security.password import Argon2PasswordHasher
 
@@ -56,6 +66,12 @@ def get_clock() -> Clock:
 def get_password_hasher() -> PasswordHasher:
     """Provide the real Argon2 password hasher."""
     return Argon2PasswordHasher()
+
+
+def get_notifier(background_tasks: BackgroundTasks) -> NotificationService:
+    """Provide a per-request notifier that schedules delivery on FastAPI's
+    `BackgroundTasks` instead of awaiting it inline (design ADR-12)."""
+    return BackgroundTaskNotifier(background_tasks, ConsoleEmailNotifier())
 
 
 def get_token_service(

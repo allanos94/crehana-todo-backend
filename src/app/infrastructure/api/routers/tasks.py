@@ -1,7 +1,8 @@
-"""Task CRUD, filtered/paginated listing, and status-change endpoints
-(tasks spec): owner-scoped create, retrieve, update, delete, list, and the
-strict status state machine. Non-owner/nonexistent both -> 404, never 403
-(design ADR-06). The assignee status-change path lands in Phase 8.
+"""Task CRUD, filtered/paginated listing, status-change, and assignee
+endpoints (tasks spec, task-assignment spec): owner-scoped create,
+retrieve, update, delete, list, the strict status state machine (owner OR
+assignee), and owner-only assignment. Non-owner/nonexistent both -> 404,
+never 403 (design ADR-06).
 """
 
 from typing import Annotated
@@ -9,7 +10,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.application.ports import Clock, UnitOfWork
+from app.application.assignment.dto import AssignTaskCommand
+from app.application.assignment.use_cases import AssignTask
+from app.application.ports import Clock, NotificationService, UnitOfWork
 from app.application.tasks.dto import (
     ChangeTaskStatusCommand,
     CreateTaskCommand,
@@ -27,13 +30,19 @@ from app.application.tasks.use_cases import (
     UpdateTask,
 )
 from app.domain.value_objects import Priority, TaskStatus
-from app.infrastructure.api.dependencies import CurrentUserId, get_clock, get_uow
+from app.infrastructure.api.dependencies import (
+    CurrentUserId,
+    get_clock,
+    get_notifier,
+    get_uow,
+)
 from app.infrastructure.api.schemas.common import ErrorResponse
 from app.infrastructure.api.schemas.tasks import (
     ChangeTaskStatusRequest,
     CreateTaskRequest,
     TaskPageResponse,
     TaskResponse,
+    UpdateAssigneeRequest,
     UpdateTaskRequest,
 )
 
@@ -194,6 +203,36 @@ async def change_task_status(
             list_id=list_id,
             task_id=task_id,
             status=payload.status,
+        )
+    )
+    return TaskResponse.model_validate(result, from_attributes=True)
+
+
+@router.patch(
+    "/{task_id}/assignee",
+    response_model=TaskResponse,
+    responses={
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+    },
+)
+async def update_task_assignee(
+    list_id: UUID,
+    task_id: UUID,
+    payload: UpdateAssigneeRequest,
+    actor_id: CurrentUserId,
+    uow: Annotated[UnitOfWork, Depends(get_uow)],
+    clock: Annotated[Clock, Depends(get_clock)],
+    notifier: Annotated[NotificationService, Depends(get_notifier)],
+) -> TaskResponse:
+    use_case = AssignTask(uow, clock, notifier)
+    result = await use_case.execute(
+        AssignTaskCommand(
+            actor_id=actor_id,
+            list_id=list_id,
+            task_id=task_id,
+            assignee_id=payload.assignee_id,
         )
     )
     return TaskResponse.model_validate(result, from_attributes=True)

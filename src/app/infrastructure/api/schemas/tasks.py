@@ -50,6 +50,15 @@ class ChangeTaskStatusRequest(BaseModel):
     status: TaskStatus
 
 
+class UpdateAssigneeRequest(BaseModel):
+    """`assignee_id` is a required field here (unlike the generic PATCH's
+    `UNSET`-aware fields): the single-purpose assignee endpoint always
+    expects an explicit value, `null` to unassign (task-assignment
+    spec)."""
+
+    assignee_id: UUID | None
+
+
 class TaskResponse(BaseModel):
     """A task's public shape."""
 
