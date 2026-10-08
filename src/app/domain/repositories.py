@@ -1,13 +1,15 @@
 """Repository Protocols (design ADR-05).
 
 Repositories are `typing.Protocol`s so fakes satisfy them structurally,
-without inheritance. `TaskRepository` lands in a later slice (3a); this
-module now also carries `TaskListRepository` (slice 2a).
+without inheritance. `TaskRepository` now carries basic CRUD (slice 3a);
+filters/counts (`TaskFilter`, `TaskCounts`, `search`) and `list_by_assignee`
+land in later slices (4, 5).
 """
 
 from typing import Protocol
 from uuid import UUID
 
+from app.domain.task import Task
 from app.domain.task_list import TaskList
 from app.domain.user import User
 
@@ -34,3 +36,13 @@ class TaskListRepository(Protocol):
     ) -> bool: ...
 
     async def delete(self, list_id: UUID) -> None: ...
+
+
+class TaskRepository(Protocol):
+    async def add(self, task: Task) -> None: ...
+
+    async def update(self, task: Task) -> None: ...
+
+    async def get(self, task_id: UUID) -> Task | None: ...
+
+    async def delete(self, task_id: UUID) -> None: ...

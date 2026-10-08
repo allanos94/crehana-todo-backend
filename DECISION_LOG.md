@@ -193,3 +193,42 @@ they land in code, not as a batch at the end.
   were already complete and unit-tested by the time it was written, so
   there was no missing-code shape to fail against. It passed on first run
   against real Postgres; no prior failing run was discarded.
+
+## Tasks Core Slice (Phase 5 / Slice 3a) Notes
+
+- The task status state machine is strict by design and is a **confirmed
+  product decision, not an oversight**: only the four edges
+  `pending -> in_progress`, `in_progress -> pending`, `in_progress -> done`,
+  and `done -> in_progress` are valid. Every other request, including a
+  same-status transition such as `pending -> pending`, raises
+  `InvalidStatusTransitionError` (409). `can_transition()` and the
+  `_TRANSITIONS` table in `value_objects.py` encode exactly this; there is
+  no implicit "no-op success" path for a same-status PATCH.
+- `due_date` validation lives in the domain (`ensure_due_date_not_past`,
+  called from both `Task.create` and `Task.reschedule`) and is compared
+  against `Clock.today()`, never the system wall clock directly, so tests
+  stay deterministic and the rule is reusable on both create and update.
+- `UpdateTask` only re-validates `due_date` when the PATCH actually
+  touches it (`command.due_date is not UNSET`): an unrelated field update
+  on a task whose stored `due_date` has since passed in real time does not
+  fail, proven by
+  `test_task_use_cases.py::test_update_task_due_date_validated_only_when_patched`.
+- `AccessPolicy.owned_task` checks list ownership first
+  (`owned_list`, raising `TaskListNotFoundError`) and only then task
+  membership (`TaskNotFoundError`): a stranger who does not own the list at
+  all never reaches the task-membership check. Both exceptions map to 404,
+  so the distinction is invisible over HTTP — it only matters for which
+  domain exception a use-case test asserts.
+- `ChangeTaskStatus` in this slice is the **owner-only** path
+  (`AccessPolicy.owned_task`). The assignee path
+  (`AccessPolicy.status_changeable_task`, owner OR assignee) is Phase 8;
+  until then, an assignee has no special status-change privilege yet
+  because `assignee_id` cannot be set before Phase 8's `AssignTask` use
+  case exists.
+- "Invalid priority value" (tasks spec scenario) is validated at the API
+  schema boundary (Pydantic enum field, Phase 6/6.4-6.5), not re-tested as
+  a domain-level use-case scenario here: `CreateTaskCommand.priority` is
+  already typed `Priority`, so an invalid string can never reach
+  `CreateTask.execute` in the first place at this layer. This mirrors how
+  `email` format validation works in the auth slices (`EmailStr` at the
+  boundary, not re-validated in the domain).

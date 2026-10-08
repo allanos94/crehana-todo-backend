@@ -12,6 +12,7 @@ from uuid import UUID
 
 from app.application.exceptions import InvalidTokenError
 from app.application.ports import TokenPair, TokenType
+from app.domain.task import Task
 from app.domain.task_list import TaskList
 from app.domain.user import User
 
@@ -73,6 +74,26 @@ class InMemoryTaskListRepository:
         self._by_id.pop(list_id, None)
 
 
+class InMemoryTaskRepository:
+    """A plain in-memory store for `Task` (basic CRUD only — filters/counts
+    and `list_by_assignee` land in later slices)."""
+
+    def __init__(self) -> None:
+        self._by_id: dict[UUID, Task] = {}
+
+    async def add(self, task: Task) -> None:
+        self._by_id[task.id] = task
+
+    async def update(self, task: Task) -> None:
+        self._by_id[task.id] = task
+
+    async def get(self, task_id: UUID) -> Task | None:
+        return self._by_id.get(task_id)
+
+    async def delete(self, task_id: UUID) -> None:
+        self._by_id.pop(task_id, None)
+
+
 class FakeUnitOfWork:
     """Fake `UnitOfWork`: a `committed` flag, and rollback restores a snapshot
     of the repositories taken when the transaction opened."""
@@ -81,24 +102,35 @@ class FakeUnitOfWork:
         self,
         users: InMemoryUserRepository | None = None,
         task_lists: InMemoryTaskListRepository | None = None,
+        tasks: InMemoryTaskRepository | None = None,
     ) -> None:
         self.users = users if users is not None else InMemoryUserRepository()
         self.task_lists = (
             task_lists if task_lists is not None else InMemoryTaskListRepository()
         )
+        self.tasks = tasks if tasks is not None else InMemoryTaskRepository()
         self.committed = False
         self._snapshot: (
-            tuple[InMemoryUserRepository, InMemoryTaskListRepository] | None
+            tuple[
+                InMemoryUserRepository,
+                InMemoryTaskListRepository,
+                InMemoryTaskRepository,
+            ]
+            | None
         ) = None
 
     async def __aenter__(self) -> Self:
         self.committed = False
-        self._snapshot = (copy.deepcopy(self.users), copy.deepcopy(self.task_lists))
+        self._snapshot = (
+            copy.deepcopy(self.users),
+            copy.deepcopy(self.task_lists),
+            copy.deepcopy(self.tasks),
+        )
         return self
 
     async def __aexit__(self, *exc: object) -> None:
         if not self.committed and self._snapshot is not None:
-            self.users, self.task_lists = self._snapshot
+            self.users, self.task_lists, self.tasks = self._snapshot
         self._snapshot = None
 
     async def commit(self) -> None:

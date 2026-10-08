@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Protocol, Self
 from uuid import UUID
 
-from app.domain.repositories import TaskListRepository, UserRepository
+from app.domain.repositories import TaskListRepository, TaskRepository, UserRepository
 
 
 class Clock(Protocol):
@@ -70,6 +70,7 @@ class UnitOfWork(Protocol):
 
     users: UserRepository
     task_lists: TaskListRepository
+    tasks: TaskRepository
 
     async def __aenter__(self) -> Self: ...
 
