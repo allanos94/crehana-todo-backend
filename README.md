@@ -94,6 +94,30 @@ docker compose logs api | grep notifications
 docker compose down -v   # stop and remove the containers/volume
 ```
 
+### Postman collection
+
+[`docs/postman/`](docs/postman/) contains a ready-to-import Postman collection
+(52 requests in 8 folders: health, auth, task lists, tasks, filters and
+completion, assignment, cleanup, security) and a matching environment.
+
+1. Start the stack with `docker compose up --build`.
+2. In Postman, choose **Import** and select both JSON files from `docs/postman/`.
+3. Run the collection in order, or all at once with the **Collection Runner**.
+   Tokens and IDs are captured automatically from the responses, every request
+   has tests for the expected status code and body, and each run uses unique
+   emails, so the collection can be re-run without conflicts.
+
+The same collection runs from the terminal with
+[Newman](https://www.npmjs.com/package/newman):
+
+```bash
+npx --yes newman run docs/postman/crehana-todo-api.postman_collection.json
+```
+
+Rate-limit counters live in the API process memory. To run the collection twice
+in a row, run `docker compose restart api` between runs so the auth endpoints are
+not throttled.
+
 ## Local setup (without Docker)
 
 Requirements: [uv](https://docs.astral.sh/uv/) and Python 3.12 (uv downloads

@@ -1,0 +1,2567 @@
+{
+  "info": {
+    "_postman_id": "02c4cd8e-2307-470e-9992-8203599143eb",
+    "name": "Crehana Todo API (develop @ v1.0.0)",
+    "description": "FastAPI Todo Lists API - Crehana backend challenge (C:\\Users\\Alberto\\Developer\\personal\\crehana-todo-api, branch develop, tag v1.0.0). Exercises auth, owner-scoped task lists/tasks, the status state machine, filtering + completion_percentage, assignment, and the error contract {code, message[, details]}.\n\nRun order matters: folders 0-6 build and tear down one owner / one list / several tasks end to end. Folder 7 is optional and last.\n\nRe-runnable: the collection-level pre-request script stamps a fresh `runId` (and derived emails/password) once per run, the first time it sees `runId` empty, so re-running the whole collection never collides with a previous run's data.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.collectionVariables.get('runId')) {",
+          "    const runId = Date.now().toString();",
+          "    pm.collectionVariables.set('runId', runId);",
+          "    pm.collectionVariables.set('ownerEmail', 'owner.' + runId + '@example.com');",
+          "    pm.collectionVariables.set('assigneeEmail', 'assignee.' + runId + '@example.com');",
+          "    pm.collectionVariables.set('strangerEmail', 'stranger.' + runId + '@example.com');",
+          "    pm.collectionVariables.set('password', 'Passw0rd1');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "runId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ownerEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "assigneeEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "strangerEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "assigneeToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "strangerToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "listId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "taskId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "assigneeId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "description": "Liveness/readiness probes (src/app/infrastructure/api/routers/health.py). Mounted at the application root, NOT under /api/v1 -- every other endpoint in this collection is under /api/v1, health is the one exception.",
+      "item": [
+        {
+          "name": "Liveness - GET /health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status field is ok', () => pm.expect(pm.response.json().status).to.equal('ok'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Always 200 while the process is up, independent of the database (health.py:14-17). No auth required.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness - GET /health/ready",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status field is ok', () => pm.expect(pm.response.json().status).to.equal('ok'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": "200 once the DB is reachable (SELECT 1), 503 otherwise (health.py:20-31). Requires `docker compose up --wait` to have passed the db healthcheck first.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Auth",
+      "description": "Registration, login, refresh and /users/me (auth.py, users.py). register/login/refresh/health use no auth; every later folder relies on the tokens captured here.",
+      "item": [
+        {
+          "name": "Register owner (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('has id', () => pm.expect(body.id).to.be.a('string'));",
+                  "pm.test('email echoes back normalized', () => pm.expect(body.email).to.equal(pm.collectionVariables.get('ownerEmail')));",
+                  "pm.test('never returns a password field', () => pm.expect(body.password).to.be.undefined);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Creates the owner account used for the rest of the run (auth.py:33-51). Returns the public user shape {id, email, created_at} - never a password hash (schemas/users.py).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Register owner duplicate (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('code is email_already_registered', () => pm.expect(pm.response.json().code).to.equal('email_already_registered'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Registering the same email twice violates the unique-email rule -> 409 email_already_registered (domain/exceptions.py:62-66).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Register weak password (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('code is weak_password', () => pm.expect(pm.response.json().code).to.equal('weak_password'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Password shorter than 8 chars fails the policy (8-128 chars, >=1 letter, >=1 digit - value_objects.py:82-92) -> 422 weak_password. Note: this error carries no `details` array, unlike schema-level validation errors - PasswordPolicyError takes no field argument (domain/exceptions.py:86-93).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"weak.{{runId}}@example.com\",\n  \"password\": \"short1\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login owner (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('token_type is bearer', () => pm.expect(body.token_type).to.equal('bearer'));",
+                  "pm.test('expires_in is 900 (15 min access TTL)', () => pm.expect(body.expires_in).to.equal(900));",
+                  "pm.collectionVariables.set('accessToken', body.access_token);",
+                  "pm.collectionVariables.set('refreshToken', body.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Issues an access/refresh pair (auth.py:54-71, jwt.py:28-35: access TTL 15min, refresh TTL 7 days). Captures both tokens for every request later in the run.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login wrong password (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('code is invalid_credentials', () => pm.expect(pm.response.json().code).to.equal('invalid_credentials'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Wrong password -> 401 invalid_credentials, the same error used for an unknown email entirely (no account-enumeration - auth/use_cases.py:58-78).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"WrongPass9\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh tokens (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('issues a new access token', () => pm.expect(body.access_token).to.be.a('string'));",
+                  "pm.collectionVariables.set('accessToken', body.access_token);",
+                  "pm.collectionVariables.set('refreshToken', body.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Exchanges the still-valid refresh token for a fresh pair (auth/use_cases.py:81-95). Overwrites the captured tokens so later requests use the freshest ones.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get current user - /users/me (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('email matches the owner', () => pm.expect(body.email).to.equal(pm.collectionVariables.get('ownerEmail')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Authenticated identity lookup (users.py:22-33). Uses the collection-level Bearer {{accessToken}} - no auth override needed."
+          },
+          "response": []
+        },
+        {
+          "name": "Get /users/me without token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('code is not_authenticated', () => pm.expect(pm.response.json().code).to.equal('not_authenticated'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "A missing Authorization header -> 401 not_authenticated (dependencies.py:97-98), distinct from an invalid/wrong-typed token.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get /users/me with refresh token as bearer (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('code is invalid_token', () => pm.expect(pm.response.json().code).to.equal('invalid_token'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "A refresh token carries `type: refresh` in its JWT claim; /users/me only accepts `type: access` -> 401 invalid_token even though the token itself is validly signed and unexpired (dependencies.py:85-99, security/jwt.py:37-50).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{refreshToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Register assignee (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('assigneeId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Registers the user who will later be assigned a task.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{assigneeEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login assignee (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('assigneeToken', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Captures the assignee's own access token for later requests.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{assigneeEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Register stranger (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Registers a third user with no relationship to the owner's list or tasks, used to prove the 404-not-403 no-enumeration rule (design ADR-06).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{strangerEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login stranger (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('strangerToken', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Captures the stranger's own access token.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{strangerEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Task lists",
+      "description": "Owner-scoped list CRUD (task_lists.py). Non-owner/nonexistent both -> 404, never 403 (design ADR-06).",
+      "item": [
+        {
+          "name": "Create task list (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('owner_id is set', () => pm.expect(body.owner_id).to.be.a('string'));",
+                  "pm.collectionVariables.set('listId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists"
+              ]
+            },
+            "description": "Owner-scoped creation (task_lists.py:37-59). Saves `listId` for every later folder.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Groceries {{runId}}\",\n  \"description\": \"Weekly shopping\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Duplicate name different case (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('code is task_list_name_conflict', () => pm.expect(pm.response.json().code).to.equal('task_list_name_conflict'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists"
+              ]
+            },
+            "description": "Per-owner name uniqueness is case-insensitive (task_lists/use_cases.py:22-33: `GROCERIES {{runId}}` collides with `Groceries {{runId}}`) -> 409 task_list_name_conflict.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"GROCERIES {{runId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Blank name (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('code is invalid_field', () => pm.expect(pm.response.json().code).to.equal('invalid_field'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists"
+              ]
+            },
+            "description": "An all-whitespace name passes the Pydantic schema (no min_length) but is rejected by the domain's blank-after-trim rule -> 422 invalid_field (value_objects.py:54-63).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"   \"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List all task lists (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('contains the created list', () => pm.expect(body.some(l => l.id === pm.collectionVariables.get('listId'))).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists"
+              ]
+            },
+            "description": "Every list owned by the caller (task_lists.py:62-76)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get task list (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('id matches', () => pm.expect(pm.response.json().id).to.equal(pm.collectionVariables.get('listId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}"
+              ]
+            },
+            "description": "Retrieve one owned list by id (task_lists.py:79-93)."
+          },
+          "response": []
+        },
+        {
+          "name": "Rename task list (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('name updated', () => pm.expect(pm.response.json().name).to.equal(pm.variables.replaceIn('Groceries Renamed {{runId}}')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}"
+              ]
+            },
+            "description": "Partial update - only `name` is sent, `description` stays untouched thanks to `model_dump(exclude_unset=True)` (design ADR-04, task_lists.py:96-118).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Groceries Renamed {{runId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get task list as stranger (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code is task_list_not_found', () => pm.expect(pm.response.json().code).to.equal('task_list_not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}"
+              ]
+            },
+            "description": "A non-owner gets the exact same 404 as a nonexistent list - never 403 (design ADR-06, authorization.py:24-31).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{strangerToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Tasks",
+      "description": "Owner-scoped task CRUD and the strict 4-edge status state machine (tasks.py, value_objects.py:40-51). By the end of this folder: taskId is done, a high-priority task and a default-priority (medium) task also exist in the same list, for folder 4's filters.",
+      "item": [
+        {
+          "name": "Create task (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('starts pending', () => pm.expect(body.status).to.equal('pending'));",
+                  "pm.collectionVariables.set('taskId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ]
+            },
+            "description": "Owner-scoped creation inside the list created above (tasks.py:52-80). Saves `taskId`; starts as status=pending.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Buy milk\",\n  \"priority\": \"low\",\n  \"due_date\": \"2030-01-01\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create task with due_date yesterday (422)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const now = new Date();",
+                  "const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));",
+                  "pm.variables.set('yesterdayDate', yesterday.toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('code is due_date_in_past', () => pm.expect(pm.response.json().code).to.equal('due_date_in_past'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ]
+            },
+            "description": "due_date is compared against the server's injected UTC clock (value_objects.py:95-103); a past date -> 422 due_date_in_past. Yesterday's UTC date is computed in a pre-request script so the test stays correct regardless of when it runs.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Expired task\",\n  \"due_date\": \"{{yesterdayDate}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create second task - high priority (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('priority is high', () => pm.expect(pm.response.json().priority).to.equal('high'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ]
+            },
+            "description": "A second task, used by the priority filter in folder 4.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Buy eggs\",\n  \"priority\": \"high\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create third task - default priority (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('defaults to medium priority', () => pm.expect(pm.response.json().priority).to.equal('medium'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ]
+            },
+            "description": "No `priority` sent -> defaults to medium (schemas/tasks.py:22-30: `priority: Priority = Priority.MEDIUM`, a slice-filled gap recorded in DECISION_LOG.md, not the spec itself).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Walk the dog\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get task (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('id matches', () => pm.expect(pm.response.json().id).to.equal(pm.collectionVariables.get('taskId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "Retrieve one owned task (tasks.py:122-137)."
+          },
+          "response": []
+        },
+        {
+          "name": "Update task (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('description updated', () => pm.expect(pm.response.json().description).to.equal('2% milk, large carton'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "Partial update of description only (tasks.py:140-162).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"2% milk, large carton\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Status pending -> in_progress (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status is in_progress', () => pm.expect(pm.response.json().status).to.equal('in_progress'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "The only edge out of pending (value_objects.py:40-46, 49-51).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"in_progress\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Status in_progress -> done (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status is done', () => pm.expect(pm.response.json().status).to.equal('done'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "A valid in_progress -> done edge.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"done\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Status done -> done (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('code is invalid_status_transition', () => pm.expect(pm.response.json().code).to.equal('invalid_status_transition'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "Same-status transitions are rejected too, not just invalid ones - done's only outgoing edge is in_progress (value_objects.py:40-51).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"done\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Status done -> pending (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('code is invalid_status_transition', () => pm.expect(pm.response.json().code).to.equal('invalid_status_transition'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "done cannot skip straight back to pending; its only valid edge is -> in_progress (value_objects.py:42-46).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"pending\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Status done -> in_progress (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status is in_progress', () => pm.expect(pm.response.json().status).to.equal('in_progress'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "The only valid edge out of done.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"in_progress\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Status in_progress -> done again (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status is done', () => pm.expect(pm.response.json().status).to.equal('done'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "Back to done, so folder 4's status=done filter has exactly one match.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"done\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Filters & completion",
+      "description": "Filtered/paginated listing and the list-wide completion_percentage (tasks.py:83-120, design ADR-10).",
+      "item": [
+        {
+          "name": "Filter status=done",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('total is 1', () => pm.expect(body.total).to.equal(1));",
+                  "pm.test('completion_percentage is 33.33 over ALL tasks', () => pm.expect(body.completion_percentage).to.equal(33.33));",
+                  "pm.test('the done task is taskId', () => pm.expect(body.items[0].id).to.equal(pm.collectionVariables.get('taskId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks?status=done",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "done"
+                }
+              ]
+            },
+            "description": "Of the 3 tasks in the list only `taskId` is done -> total=1. completion_percentage is computed over ALL tasks regardless of the filter (design ADR-10, tasks/use_cases.py:136-158): 1 done / 3 total = 33.33%."
+          },
+          "response": []
+        },
+        {
+          "name": "Filter priority=high",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('total is 1', () => pm.expect(body.total).to.equal(1));",
+                  "pm.test('item priority is high', () => pm.expect(body.items[0].priority).to.equal('high'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks?priority=high",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ],
+              "query": [
+                {
+                  "key": "priority",
+                  "value": "high"
+                }
+              ]
+            },
+            "description": "Only the 'Buy eggs' task matches."
+          },
+          "response": []
+        },
+        {
+          "name": "Pagination limit=1&offset=1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('total is 3', () => pm.expect(body.total).to.equal(3));",
+                  "pm.test('one item on this page', () => pm.expect(body.items.length).to.equal(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks?limit=1&offset=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "1"
+                },
+                {
+                  "key": "offset",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "No filter: total still reflects all 3 tasks, but only 1 item is returned for this page (limit/offset never affect `total`)."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid status filter (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('code is validation_error', () => pm.expect(pm.response.json().code).to.equal('validation_error'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks?status=bogus",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "bogus"
+                }
+              ]
+            },
+            "description": "`status` is a query-level enum (tasks.py:96); a value outside {pending, in_progress, done} fails FastAPI/Pydantic request validation -> 422 validation_error (errors.py:63-82), not a domain error."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid limit=0 (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('code is validation_error', () => pm.expect(pm.response.json().code).to.equal('validation_error'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks?limit=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "`limit` has `ge=1` (tasks.py:98); 0 fails validation -> 422."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Assignment",
+      "description": "Owner-only assign/unassign and the assignee's own cross-list visibility (assignment/use_cases.py, task-assignment spec).",
+      "item": [
+        {
+          "name": "Assign to unknown uuid (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('code is assignee_not_found', () => pm.expect(pm.response.json().code).to.equal('assignee_not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/assignee",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "assignee"
+              ]
+            },
+            "description": "A well-formed but nonexistent user id -> 422 assignee_not_found (assignment/use_cases.py:44-47), not 404 - the assignee is a request field being validated, not the resource being addressed.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignee_id\": \"00000000-0000-0000-0000-000000000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Assign to assignee (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('assignee_id is set', () => pm.expect(pm.response.json().assignee_id).to.equal(pm.collectionVariables.get('assigneeId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/assignee",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "assignee"
+              ]
+            },
+            "description": "Owner-only assignment (assignment/use_cases.py:17-68). Triggers one fake email invitation AFTER the commit (design ADR-12) - look for it with `docker compose logs api | grep notifications`; it is not observable over HTTP so it is not asserted here.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignee_id\": \"{{assigneeId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Assignee lists own tasks - /users/me/tasks (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('contains the assigned task', () => pm.expect(body.items.some(t => t.id === pm.collectionVariables.get('taskId'))).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me/tasks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me",
+                "tasks"
+              ]
+            },
+            "description": "Cross-list visibility for the assignee, without owning the list (users.py:36-57, task-assignment spec).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{assigneeToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Assignee changes status (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status is in_progress', () => pm.expect(pm.response.json().status).to.equal('in_progress'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "The one status-change privilege a non-owner has (authorization.py:45-64, design ADR-06). taskId is currently `done` (end of folder 3), so `in_progress` is the only legal target here.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"in_progress\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{assigneeToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Assignee GET task (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code is task_list_not_found (list-ownership checked first)', () => pm.expect(pm.response.json().code).to.equal('task_list_not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "SURPRISE: GET is owner-only (`owned_task`), which checks list ownership first - so the assignee (who owns neither the list nor is checked here) gets 404 task_list_not_found, NOT task_not_found, even though the task itself exists and is assigned to them (authorization.py:33-43).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{assigneeToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Assignee DELETE task (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code is task_list_not_found', () => pm.expect(pm.response.json().code).to.equal('task_list_not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "Same owner-only `owned_task` path as GET -> 404 task_list_not_found for the assignee too (tasks.py:165-179).",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{assigneeToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Stranger PATCH status (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code is task_not_found (no list enumeration here)', () => pm.expect(pm.response.json().code).to.equal('task_not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "SURPRISE: unlike GET/DELETE, the status endpoint uses `status_changeable_task`, which deliberately never reveals list existence first (authorization.py:45-64) -> 404 task_not_found here, a DIFFERENT code than the task_list_not_found the assignee got above for the exact same task, from a stranger who is neither owner nor assignee.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"pending\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{strangerToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unassign with null (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('assignee_id is null', () => pm.expect(pm.response.json().assignee_id).to.equal(null));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}/assignee",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}",
+                "assignee"
+              ]
+            },
+            "description": "Explicit `null` clears the assignee (schemas/tasks.py:53-59: `assignee_id` is required here, unlike the generic PATCH's UNSET-aware fields). Unassigning never sends a notification (design ADR-12).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignee_id\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Cleanup",
+      "description": "Deletes everything this run created.",
+      "item": [
+        {
+          "name": "Delete task (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 204', () => pm.response.to.have.status(204));",
+                  "pm.test('body is empty', () => pm.expect(pm.response.text()).to.equal(''));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}/tasks/{{taskId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}",
+                "tasks",
+                "{{taskId}}"
+              ]
+            },
+            "description": "Owner deletes taskId (tasks.py:165-179)."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete task list (204)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}"
+              ]
+            },
+            "description": "Deletes the list, cascading its remaining tasks at the DB level (task_lists.py:121-133, task-lists spec)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get task list after delete (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('code is task_list_not_found', () => pm.expect(pm.response.json().code).to.equal('task_list_not_found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/lists/{{listId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "lists",
+                "{{listId}}"
+              ]
+            },
+            "description": "The list is gone -> 404 task_list_not_found, same as it never having existed."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "7. Security (optional, last)",
+      "description": "Security response headers and a rate-limit demonstration (security-hardening spec). The rate-limit request is manual by design - see its description.",
+      "item": [
+        {
+          "name": "Security response headers on /health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('X-Content-Type-Options is nosniff', () => pm.expect(pm.response.headers.get('X-Content-Type-Options')).to.equal('nosniff'));",
+                  "pm.test('X-Frame-Options is DENY', () => pm.expect(pm.response.headers.get('X-Frame-Options')).to.equal('DENY'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "security_headers_middleware (middleware.py:28-38) attaches these to every response, verified here on the cheapest endpoint.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Rate limit demonstration (manual - run several times fast)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 401 (bad credentials) or 429 (rate limited)', () => {",
+                  "    pm.expect([401, 429]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test('code matches the observed status', () => {",
+                  "    const body = pm.response.json();",
+                  "    if (pm.response.code === 429) {",
+                  "        pm.expect(body.code).to.equal('rate_limited');",
+                  "    } else {",
+                  "        pm.expect(body.code).to.equal('invalid_credentials');",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "AUTH_RATE_LIMIT=10/minute is enabled in docker-compose.yml (rate_limit.py). A single call from this collection run will almost always just be 401 (wrong password) - genuinely tripping 429 needs several rapid requests to the SAME auth route within 60s (slowapi scopes the limit per decorated route, not globally across register/login/refresh). Click Send repeatedly by hand (or use the Runner with a short delay) to see 429 with code rate_limited. The assertion below deliberately accepts either outcome so the automated run never depends on timing.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"WrongPass9\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
