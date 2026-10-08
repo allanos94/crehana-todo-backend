@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.infrastructure.api.errors import register_exception_handlers
 from app.infrastructure.api.routers.health import router as health_router
 from app.infrastructure.config import get_settings
 from app.infrastructure.db.session import create_engine, create_session_factory
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build and configure the FastAPI application instance."""
     app = FastAPI(title="Todo Lists API", lifespan=lifespan)
+    register_exception_handlers(app)
     app.include_router(health_router)
     return app
 
