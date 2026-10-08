@@ -11,7 +11,7 @@ from typing import Self
 from uuid import UUID
 
 from app.application.exceptions import InvalidTokenError
-from app.application.ports import TokenPair, TokenType
+from app.application.ports import TaskInvitation, TokenPair, TokenType
 from app.domain.repositories import TaskCounts, TaskFilter
 from app.domain.task import Task
 from app.domain.task_list import TaskList
@@ -119,6 +119,17 @@ class InMemoryTaskRepository:
         )
         return page, counts
 
+    async def list_by_assignee(
+        self, user_id: UUID, limit: int, offset: int
+    ) -> tuple[list[Task], int]:
+        matching = [
+            task for task in self._by_id.values() if task.assignee_id == user_id
+        ]
+        matching.sort(key=lambda task: (task.created_at, task.id))
+        total = len(matching)
+        page = matching[offset : offset + limit]
+        return page, total
+
 
 class FakeUnitOfWork:
     """Fake `UnitOfWork`: a `committed` flag, and rollback restores a snapshot
@@ -209,3 +220,14 @@ class FixedClock:
 
     def today(self) -> date:
         return self._today
+
+
+class RecordingNotifier:
+    """A `NotificationService` double that records every invitation sent,
+    so tests can assert exactly when (and to whom) a notification fires."""
+
+    def __init__(self) -> None:
+        self.sent: list[TaskInvitation] = []
+
+    async def send_task_invitation(self, message: TaskInvitation) -> None:
+        self.sent.append(message)

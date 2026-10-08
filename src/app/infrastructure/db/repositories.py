@@ -161,3 +161,27 @@ class SqlAlchemyTaskRepository:
         page_result = await self._session.execute(page_statement)
         items = [model_to_task(model) for model in page_result.scalars()]
         return items, counts
+
+    async def list_by_assignee(
+        self, user_id: UUID, limit: int, offset: int
+    ) -> tuple[list[Task], int]:
+        """List tasks assigned to `user_id` across every list (design
+        ADR-10: `GET /users/me/tasks`, same `limit`/`offset`/ordering
+        shape as `search`)."""
+        count_statement = (
+            select(func.count())
+            .select_from(TaskModel)
+            .where(TaskModel.assignee_id == user_id)
+        )
+        total = (await self._session.execute(count_statement)).scalar_one()
+
+        page_statement = (
+            select(TaskModel)
+            .where(TaskModel.assignee_id == user_id)
+            .order_by(TaskModel.created_at, TaskModel.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        page_result = await self._session.execute(page_statement)
+        items = [model_to_task(model) for model in page_result.scalars()]
+        return items, total

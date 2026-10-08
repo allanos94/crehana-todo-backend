@@ -84,8 +84,8 @@ list, both return 404 — never 403 — so ownership can never be probed.
 ## Tasks
 
 Every request below requires `Authorization: Bearer <access_token>`.
-The assignee path is not implemented yet (Phase 8); this section covers
-CRUD, status changes, and filtered/paginated listing.
+This section covers CRUD, status changes, and filtered/paginated listing;
+assignment and the assignee's own view are documented separately below.
 
 ```bash
 # Create a task (priority defaults to "medium" when omitted)
@@ -142,6 +142,45 @@ those bounds, returns 422 `validation_error`. The response is
 - `completion_percentage` is `done / total` over **every** task in the
   list, rounded to 2 decimals, regardless of any `status`/`priority`
   filter applied to `items`. An empty list reports `0.0`.
+
+## Assignment
+
+Only the list owner may assign or unassign a task; the target must be an
+existing registered user.
+
+```bash
+# Assign (owner-only; assignee_id must be a registered user's id)
+curl -s -X PATCH http://localhost:8000/api/v1/lists/<list_id>/tasks/<task_id>/assignee \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"assignee_id": "<user_id>"}'
+
+# Unassign (null; no invitation is sent)
+curl -s -X PATCH http://localhost:8000/api/v1/lists/<list_id>/tasks/<task_id>/assignee \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"assignee_id": null}'
+
+# The assignee's own cross-list view
+curl -s http://localhost:8000/api/v1/users/me/tasks \
+  -H "Authorization: Bearer $ASSIGNEE_ACCESS_TOKEN"
+```
+
+An unknown `assignee_id` returns 422 `assignee_not_found`; a non-owner
+caller returns 404. Assigning to a new, non-null user triggers one fake
+email invitation (logged on `app.notifications`, e.g.
+`INFO:app.notifications:Task invitation: owner@example.com invited
+assignee@example.com to 'Buy milk' (list 'Groceries')`) after the
+assignment commits — no real email is ever sent, and unassigning or
+reassigning the same user again never triggers one.
+
+A non-owner assignee may `PATCH .../status` on their own assigned task
+(the same strict state machine as the owner), but gets 404 on every other
+verb for that task (`GET`, `PATCH` on the task itself, `DELETE`,
+`PATCH .../assignee`) and on the containing list's own endpoints — they
+see only the one task they were assigned, never the rest of the list. A
+stranger (neither owner nor assignee) gets 404 everywhere, identically to
+a nonexistent resource.
 
 ## Architecture
 

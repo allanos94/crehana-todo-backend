@@ -102,3 +102,47 @@ async def test_owned_task_requires_list_ownership_then_task_membership() -> None
     # Nonexistent task -> 404.
     with pytest.raises(TaskNotFoundError):
         await policy.owned_task(task_list.id, uuid4(), owner_id)
+
+
+async def test_status_changeable_task_allows_owner_or_assignee_else_404() -> None:
+    """task-assignment spec: the owner and the task's assignee may both
+    change status; a stranger, a missing list, and a missing task are all
+    indistinguishable -- always `TaskNotFoundError` (design ADR-06: no
+    enumeration), never the two-stage `TaskListNotFoundError` first."""
+    uow = FakeUnitOfWork()
+    owner_id = uuid4()
+    assignee_id = uuid4()
+    stranger_id = uuid4()
+    task_list = TaskList.create(
+        owner_id=owner_id, name="Groceries", description=None, now=_NOW
+    )
+    await uow.task_lists.add(task_list)
+    task = Task.create(
+        list_id=task_list.id,
+        title="Buy milk",
+        description=None,
+        priority=Priority.LOW,
+        due_date=None,
+        today=_TODAY,
+        now=_NOW,
+    )
+    task.assign(assignee_id, _NOW)
+    await uow.tasks.add(task)
+    policy = AccessPolicy(uow)
+
+    owner_result = await policy.status_changeable_task(task_list.id, task.id, owner_id)
+    assert owner_result.id == task.id
+
+    assignee_result = await policy.status_changeable_task(
+        task_list.id, task.id, assignee_id
+    )
+    assert assignee_result.id == task.id
+
+    with pytest.raises(TaskNotFoundError):
+        await policy.status_changeable_task(task_list.id, task.id, stranger_id)
+
+    with pytest.raises(TaskNotFoundError):
+        await policy.status_changeable_task(uuid4(), task.id, owner_id)
+
+    with pytest.raises(TaskNotFoundError):
+        await policy.status_changeable_task(task_list.id, uuid4(), owner_id)

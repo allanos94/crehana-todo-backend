@@ -329,3 +329,75 @@ they land in code, not as a batch at the end.
   validation was needed, since an out-of-range or invalid-enum query
   parameter never reaches `ListTasksCommand` in the first place, the same
   pattern already established for `priority` on task creation (Phase 6).
+
+## Assignment and Invitation Slice (Phase 8 / Slice 5) Notes
+
+- `AccessPolicy.status_changeable_task` always raises the single
+  `TaskNotFoundError` (never `TaskListNotFoundError` first, unlike
+  `owned_task`'s two-stage check): a missing list, a missing task, and a
+  stranger must be indistinguishable per the task-assignment spec's
+  no-enumeration requirement, so both the list and the task are fetched
+  up front and a single boolean decides authorization. `ChangeTaskStatus`
+  now calls this policy instead of `owned_task`, so the owner OR the
+  task's assignee may change status; every other task use case
+  (`GetTask`, `UpdateTask`, `DeleteTask`, `AssignTask`) stays owner-only
+  via `owned_task`, so a non-owner assigning or editing the task itself
+  still gets the two-stage `TaskListNotFoundError`/`TaskNotFoundError`
+  (both 404 over HTTP — the existing Phase 5/6 non-owner test pattern).
+- `AssignTask` implements design ADR-12's exact five-step sequence inside
+  one `async with self._uow:` block: `owned_task` -> load the assignee by
+  id (missing -> `AssigneeNotFoundError`, 422) -> `task.assign(...)` ->
+  `commit()` -> only then, when the new assignee is non-null and differs
+  from the previous one, build and send one `TaskInvitation`. The owner's
+  and new assignee's emails are read from the same open session before
+  committing (needed for the invitation's content), never after, so no
+  extra round trip or detached-entity risk.
+- `AssignTask`'s result is the `Task` entity directly (same shape as
+  `ChangeTaskStatus`), not a dedicated `AssignTaskResult` — the design
+  doc's ADR-04 lists `AssignTaskResult` as an example of a composite
+  result, but nothing about assignment actually needs extra fields beyond
+  the updated task; returning `Task` directly avoids an empty wrapper
+  dataclass. This is a deviation from that one sentence in the design,
+  not from any ADR-12 behavior.
+- `BackgroundTaskNotifier.send_task_invitation` is `async def` (satisfying
+  the `NotificationService` Protocol) but does no `await`-worthy work: it
+  calls the synchronous `BackgroundTasks.add_task(...)` to schedule the
+  real delivery, then returns immediately, so `AssignTask`'s `await
+  self._notifier.send_task_invitation(...)` never blocks on the actual
+  notification — FastAPI runs the scheduled task only after the response
+  is sent (task-assignment spec: "without waiting for the notification to
+  finish").
+- **Discovered and fixed two real logging gaps, both found by the Docker
+  smoke test, not by the unit/integration suite alone:**
+  1. `alembic/env.py` called `fileConfig(config.config_file_name)` with
+     its default `disable_existing_loggers=True`. In the test suite,
+     Alembic's `env.py` runs in the *same process* as the API code (the
+     integration harness drives migrations in-process), so the first
+     integration test to run migrations permanently disabled every
+     pre-existing `app.*` logger (including `app.notifications`) for the
+     rest of the session — any instance already created at that point
+     gets `logger.disabled = True`, which `caplog.at_level(...)` does not
+     undo. This surfaced as a flaky `test_console_notifier_logs_...`
+     failure that passed in isolation but failed when the full suite ran
+     (order-dependent on which test first created the `app.notifications`
+     `Logger` object relative to the first integration test). Fixed by
+     passing `disable_existing_loggers=False` — safe because the real
+     `alembic upgrade head` CLI runs in its own separate OS process via
+     `docker/entrypoint.sh` anyway, so this flag never mattered there.
+  2. Independently, the real running server (verified via
+     `docker compose logs api`) never printed the invitation line at all:
+     nothing in the app ever configures logging, so Python's root logger
+     defaults to `WARNING` with no handler, silently dropping every
+     `INFO`-level `app.notifications`/`app.infrastructure.api.errors`
+     call outside of tests (where `caplog` or `pytest`'s own handler
+     masked the gap). Fixed with one `logging.basicConfig(level=logging.INFO)`
+     call at the top of `main.py`, which runs at import time, before
+     uvicorn's own `dictConfig` (which only configures `uvicorn.*` loggers
+     and explicitly sets `disable_existing_loggers=False`, so it does not
+     re-trigger gap #1). Verified end-to-end: `docker compose logs api`
+     now shows `INFO:app.notifications:Task invitation: ... invited ...
+     to '...' (list '...')` after a real assignment over HTTP.
+- `GET /users/me/tasks`'s response schema (`AssignedTaskPageResponse`) has
+  no `completion_percentage` field, matching design ADR-10's wording
+  exactly (`{items, total}`) — completion is a per-list metric and is not
+  meaningful across lists the caller does not own.
