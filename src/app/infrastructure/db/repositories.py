@@ -5,15 +5,18 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.task import Task
 from app.domain.task_list import TaskList
 from app.domain.user import User
 from app.infrastructure.db.mappers import (
+    model_to_task,
     model_to_task_list,
     model_to_user,
     task_list_to_model,
+    task_to_model,
     user_to_model,
 )
-from app.infrastructure.db.models import TaskListModel, UserModel
+from app.infrastructure.db.models import TaskListModel, TaskModel, UserModel
 
 
 class SqlAlchemyUserRepository:
@@ -81,5 +84,37 @@ class SqlAlchemyTaskListRepository:
 
     async def delete(self, list_id: UUID) -> None:
         model = await self._session.get(TaskListModel, list_id)
+        if model is not None:
+            await self._session.delete(model)
+
+
+class SqlAlchemyTaskRepository:
+    """Implements `TaskRepository`'s basic CRUD against one request-scoped
+    `AsyncSession`. Filters/counts (`search`) and `list_by_assignee` land
+    in later slices (4, 5)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, task: Task) -> None:
+        self._session.add(task_to_model(task))
+
+    async def update(self, task: Task) -> None:
+        model = await self._session.get(TaskModel, task.id)
+        assert model is not None
+        model.title = task.title
+        model.description = task.description
+        model.status = task.status
+        model.priority = task.priority
+        model.due_date = task.due_date
+        model.assignee_id = task.assignee_id
+        model.updated_at = task.updated_at
+
+    async def get(self, task_id: UUID) -> Task | None:
+        model = await self._session.get(TaskModel, task_id)
+        return model_to_task(model) if model is not None else None
+
+    async def delete(self, task_id: UUID) -> None:
+        model = await self._session.get(TaskModel, task_id)
         if model is not None:
             await self._session.delete(model)
