@@ -1,6 +1,6 @@
 [project]
 name = "todo-api"
-version = "0.1.0"
+version = "1.0.1"
 description = "Crehana backend challenge: a Todo Lists API with auth, task assignment, and notifications."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
