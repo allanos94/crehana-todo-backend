@@ -13,10 +13,14 @@ from app.application.tasks.dto import (
     CreateTaskCommand,
     DeleteTaskCommand,
     GetTaskCommand,
+    ListTasksCommand,
+    TaskPage,
     UpdateTaskCommand,
 )
 from app.domain.exceptions import InvalidFieldError
+from app.domain.repositories import TaskFilter
 from app.domain.task import Task
+from app.domain.value_objects import completion_percentage
 
 
 class CreateTask:
@@ -124,3 +128,28 @@ class ChangeTaskStatus:
             await self._uow.tasks.update(task)
             await self._uow.commit()
         return task
+
+
+class ListTasks:
+    """List an owned list's tasks, filtered and paginated, alongside the
+    list-wide `completion_percentage` (tasks spec: filtered/paginated
+    listing; design ADR-10: completion ignores the active filters)."""
+
+    def __init__(self, uow: UnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(self, command: ListTasksCommand) -> TaskPage:
+        async with self._uow:
+            policy = AccessPolicy(self._uow)
+            await policy.owned_list(command.list_id, command.actor_id)
+            filters = TaskFilter(status=command.status, priority=command.priority)
+            items, counts = await self._uow.tasks.search(
+                command.list_id, filters, command.limit, command.offset
+            )
+        return TaskPage(
+            items=items,
+            total=counts.total_filtered,
+            completion_percentage=completion_percentage(
+                counts.done_all, counts.total_all
+            ),
+        )

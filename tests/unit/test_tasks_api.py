@@ -68,6 +68,23 @@ async def _create_list(client: AsyncClient, headers: dict[str, str]) -> str:
     return list_id
 
 
+async def _create_task_api(
+    client: AsyncClient,
+    headers: dict[str, str],
+    list_id: str,
+    *,
+    title: str = "Task",
+    priority: str = "low",
+) -> str:
+    response = await client.post(
+        f"/api/v1/lists/{list_id}/tasks",
+        json={"title": title, "priority": priority},
+        headers=headers,
+    )
+    task_id: str = response.json()["id"]
+    return task_id
+
+
 async def test_create_returns_201_with_all_fields(client: AsyncClient) -> None:
     headers = await _auth_headers(client)
     list_id = await _create_list(client, headers)
@@ -383,3 +400,216 @@ async def test_status_transitions(
     assert response.status_code == expected_status
     if expected_status == 409:
         assert response.json()["code"] == "invalid_status_transition"
+
+
+async def test_list_tasks_completion_ignores_active_filters(
+    client: AsyncClient, uow: FakeUnitOfWork
+) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+    task_ids = [
+        await _create_task_api(client, headers, list_id, title=f"Task {i}")
+        for i in range(4)
+    ]
+    done_task = await uow.tasks.get(UUID(task_ids[0]))
+    assert done_task is not None
+    done_task.status = TaskStatus.DONE
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?status=pending", headers=headers
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 3
+    assert body["completion_percentage"] == 25.00
+
+
+async def test_list_tasks_completion_zero_tasks(client: AsyncClient) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+
+    response = await client.get(f"/api/v1/lists/{list_id}/tasks", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0
+    assert body["completion_percentage"] == 0.0
+
+
+async def test_list_tasks_completion_rounds_to_two_decimals(
+    client: AsyncClient, uow: FakeUnitOfWork
+) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+    task_ids = [
+        await _create_task_api(client, headers, list_id, title=f"Task {i}")
+        for i in range(3)
+    ]
+    done_task = await uow.tasks.get(UUID(task_ids[0]))
+    assert done_task is not None
+    done_task.status = TaskStatus.DONE
+
+    response = await client.get(f"/api/v1/lists/{list_id}/tasks", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["completion_percentage"] == 33.33
+
+
+async def test_list_tasks_filters_by_status(
+    client: AsyncClient, uow: FakeUnitOfWork
+) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+    pending_id = await _create_task_api(client, headers, list_id, title="Pending")
+    done_id = await _create_task_api(client, headers, list_id, title="Done")
+    done_task = await uow.tasks.get(UUID(done_id))
+    assert done_task is not None
+    done_task.status = TaskStatus.DONE
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?status=done", headers=headers
+    )
+
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.json()["items"]]
+    assert ids == [done_id]
+    assert pending_id not in ids
+
+
+async def test_list_tasks_filters_by_priority(client: AsyncClient) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+    low_id = await _create_task_api(client, headers, list_id, priority="low")
+    high_id = await _create_task_api(client, headers, list_id, priority="high")
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?priority=high", headers=headers
+    )
+
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.json()["items"]]
+    assert ids == [high_id]
+    assert low_id not in ids
+
+
+async def test_list_tasks_combines_status_and_priority_filters(
+    client: AsyncClient, uow: FakeUnitOfWork
+) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+    match_id = await _create_task_api(
+        client, headers, list_id, title="Match", priority="high"
+    )
+    wrong_priority_id = await _create_task_api(
+        client, headers, list_id, title="WrongPriority", priority="low"
+    )
+    wrong_status_id = await _create_task_api(
+        client, headers, list_id, title="WrongStatus", priority="high"
+    )
+    wrong_status_task = await uow.tasks.get(UUID(wrong_status_id))
+    assert wrong_status_task is not None
+    wrong_status_task.status = TaskStatus.DONE
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?status=pending&priority=high",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.json()["items"]]
+    assert ids == [match_id]
+    assert wrong_priority_id not in ids
+    assert wrong_status_id not in ids
+
+
+async def test_list_tasks_pagination_total_reflects_filtered_count(
+    client: AsyncClient,
+) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+    for index in range(10):
+        await _create_task_api(client, headers, list_id, title=f"Task {index}")
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?limit=3&offset=3", headers=headers
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 3
+    assert body["total"] == 10
+
+
+async def test_list_tasks_non_owner_returns_404(client: AsyncClient) -> None:
+    owner_headers = await _auth_headers(client, email="owner@example.com")
+    stranger_headers = await _auth_headers(client, email="stranger@example.com")
+    list_id = await _create_list(client, owner_headers)
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks", headers=stranger_headers
+    )
+
+    assert response.status_code == 404
+
+
+async def test_list_tasks_requires_authentication(client: AsyncClient) -> None:
+    response = await client.get(
+        "/api/v1/lists/00000000-0000-0000-0000-000000000000/tasks"
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+async def test_list_tasks_rejects_limit_out_of_range(
+    client: AsyncClient, limit: int
+) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?limit={limit}", headers=headers
+    )
+
+    assert response.status_code == 422
+
+
+async def test_list_tasks_rejects_negative_offset(client: AsyncClient) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?offset=-1", headers=headers
+    )
+
+    assert response.status_code == 422
+
+
+async def test_list_tasks_rejects_invalid_status_enum(client: AsyncClient) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+
+    response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?status=bogus", headers=headers
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_list_tasks_default_limit_and_offset(
+    client: AsyncClient,
+) -> None:
+    headers = await _auth_headers(client)
+    list_id = await _create_list(client, headers)
+    for index in range(25):
+        await _create_task_api(client, headers, list_id, title=f"Task {index}")
+
+    response = await client.get(f"/api/v1/lists/{list_id}/tasks", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 20  # default limit
+    assert body["total"] == 25

@@ -84,8 +84,8 @@ list, both return 404 — never 403 — so ownership can never be probed.
 ## Tasks
 
 Every request below requires `Authorization: Bearer <access_token>`.
-Filters, pagination, `completion_percentage`, and the assignee path are not
-implemented yet (Phases 7-8); this section covers CRUD and status changes.
+The assignee path is not implemented yet (Phase 8); this section covers
+CRUD, status changes, and filtered/paginated listing.
 
 ```bash
 # Create a task (priority defaults to "medium" when omitted)
@@ -113,6 +113,10 @@ curl -s -X PATCH http://localhost:8000/api/v1/lists/<list_id>/tasks/<task_id>/st
 # Delete
 curl -s -X DELETE http://localhost:8000/api/v1/lists/<list_id>/tasks/<task_id> \
   -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# List, filtered and paginated
+curl -s "http://localhost:8000/api/v1/lists/<list_id>/tasks?status=pending&priority=high&limit=20&offset=0" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
 `title` must be non-blank after trimming and at most 200 characters;
@@ -124,6 +128,20 @@ actually touches it. The status state machine only allows
 and `done -> in_progress`; every other transition, including a same-status
 request, returns 409 `invalid_status_transition`. A task in another user's
 list, or a nonexistent task, both return 404 — never 403.
+
+### Filtering, pagination, and completion
+
+`GET /api/v1/lists/{list_id}/tasks` accepts optional `status` and
+`priority` query filters, plus `limit` (1-100, default 20) and `offset`
+(≥ 0, default 0); an invalid enum value, or a `limit`/`offset` outside
+those bounds, returns 422 `validation_error`. The response is
+`{items, total, completion_percentage}`:
+
+- `items` and `total` reflect the applied filters and pagination — `total`
+  is the full matching count, not the page size.
+- `completion_percentage` is `done / total` over **every** task in the
+  list, rounded to 2 decimals, regardless of any `status`/`priority`
+  filter applied to `items`. An empty list reports `0.0`.
 
 ## Architecture
 

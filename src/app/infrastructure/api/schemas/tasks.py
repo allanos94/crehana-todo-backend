@@ -63,3 +63,13 @@ class TaskResponse(BaseModel):
     assignee_id: UUID | None
     created_at: datetime
     updated_at: datetime
+
+
+class TaskPageResponse(BaseModel):
+    """A filtered, paginated page of tasks (tasks spec: `items`/`total`
+    reflect the applied filters and pagination; `completion_percentage`
+    never does -- design ADR-10)."""
+
+    items: list[TaskResponse]
+    total: int
+    completion_percentage: float

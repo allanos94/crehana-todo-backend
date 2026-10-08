@@ -3,8 +3,9 @@
 Every command carries `actor_id`. `UpdateTaskCommand` is `UNSET`-aware so
 `UpdateTask` only touches fields the client actually patched (ADR-04: this
 is also why `due_date` is only re-validated when it is present in the
-patch). Results are the `Task` domain entity itself; no composite result is
-needed by any task use case in this slice.
+patch). Results are the `Task` domain entity itself for every use case
+except `ListTasks`, whose composite `TaskPage` result pairs the filtered
+page with the list-wide `completion_percentage` (design ADR-10).
 """
 
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from datetime import date
 from uuid import UUID
 
 from app.application.common import UNSET, Unset
+from app.domain.task import Task
 from app.domain.value_objects import Priority, TaskStatus
 
 
@@ -59,3 +61,23 @@ class ChangeTaskStatusCommand:
     list_id: UUID
     task_id: UUID
     status: TaskStatus
+
+
+@dataclass(frozen=True, slots=True)
+class ListTasksCommand:
+    actor_id: UUID
+    list_id: UUID
+    status: TaskStatus | None
+    priority: Priority | None
+    limit: int
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class TaskPage:
+    """`items`/`total` reflect `ListTasksCommand`'s filters and pagination;
+    `completion_percentage` never does (design ADR-10, tasks spec)."""
+
+    items: list[Task]
+    total: int
+    completion_percentage: float

@@ -1,14 +1,13 @@
-"""Task CRUD and status-change endpoints (tasks spec): owner-scoped
-create, retrieve, update, delete, and the strict status state machine.
-Non-owner/nonexistent both -> 404, never 403 (design ADR-06). Filters,
-pagination, and `completion_percentage` land in Phase 7; the assignee
-status-change path lands in Phase 8.
+"""Task CRUD, filtered/paginated listing, and status-change endpoints
+(tasks spec): owner-scoped create, retrieve, update, delete, list, and the
+strict status state machine. Non-owner/nonexistent both -> 404, never 403
+(design ADR-06). The assignee status-change path lands in Phase 8.
 """
 
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from app.application.ports import Clock, UnitOfWork
 from app.application.tasks.dto import (
@@ -16,6 +15,7 @@ from app.application.tasks.dto import (
     CreateTaskCommand,
     DeleteTaskCommand,
     GetTaskCommand,
+    ListTasksCommand,
     UpdateTaskCommand,
 )
 from app.application.tasks.use_cases import (
@@ -23,13 +23,16 @@ from app.application.tasks.use_cases import (
     CreateTask,
     DeleteTask,
     GetTask,
+    ListTasks,
     UpdateTask,
 )
+from app.domain.value_objects import Priority, TaskStatus
 from app.infrastructure.api.dependencies import CurrentUserId, get_clock, get_uow
 from app.infrastructure.api.schemas.common import ErrorResponse
 from app.infrastructure.api.schemas.tasks import (
     ChangeTaskStatusRequest,
     CreateTaskRequest,
+    TaskPageResponse,
     TaskResponse,
     UpdateTaskRequest,
 )
@@ -66,6 +69,45 @@ async def create_task(
         )
     )
     return TaskResponse.model_validate(result, from_attributes=True)
+
+
+@router.get(
+    "",
+    response_model=TaskPageResponse,
+    responses={
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+    },
+)
+async def list_tasks(
+    list_id: UUID,
+    actor_id: CurrentUserId,
+    uow: Annotated[UnitOfWork, Depends(get_uow)],
+    status_filter: Annotated[TaskStatus | None, Query(alias="status")] = None,
+    priority_filter: Annotated[Priority | None, Query(alias="priority")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> TaskPageResponse:
+    use_case = ListTasks(uow)
+    result = await use_case.execute(
+        ListTasksCommand(
+            actor_id=actor_id,
+            list_id=list_id,
+            status=status_filter,
+            priority=priority_filter,
+            limit=limit,
+            offset=offset,
+        )
+    )
+    return TaskPageResponse(
+        items=[
+            TaskResponse.model_validate(item, from_attributes=True)
+            for item in result.items
+        ],
+        total=result.total,
+        completion_percentage=result.completion_percentage,
+    )
 
 
 @router.get(
