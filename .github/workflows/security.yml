@@ -1,0 +1,112 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+
+permissions: {}
+
+jobs:
+  bandit:
+    name: bandit (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      # Medium+ severity only (`-ll`): blocking, since these findings are in
+      # our own first-party code and should be fixed before merge, not
+      # surfaced-but-ignored.
+      - run: uvx bandit -r src -ll
+
+  pip-audit:
+    name: pip-audit (dependency vulnerabilities)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv export --frozen --no-hashes > requirements.txt
+      # Non-blocking: a transitive dependency vulnerability needs time to
+      # triage/patch upstream and should not block every PR the moment a
+      # new CVE is published. Findings still appear in the run output.
+      - run: uvx pip-audit -r requirements.txt
+        continue-on-error: true
+
+  gitleaks:
+    name: gitleaks (secret scanning)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE is only required for GitHub Organizations;
+          # this is a personal repository, so the action runs free.
+
+  trivy:
+    name: trivy (container image scan)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t crehana-todo-api:security-scan .
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: crehana-todo-api:security-scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  snyk:
+    name: snyk (dependency vulnerabilities, optional)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Every step below is individually gated on `SNYK_TOKEN` being set, so a
+    # missing token (e.g. a fork, or before the maintainer adds one) is a
+    # silent no-op rather than a failing job.
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.SNYK_TOKEN != ''
+      - uses: astral-sh/setup-uv@v3
+        if: env.SNYK_TOKEN != ''
+      - run: uv export --frozen --no-hashes > requirements.txt
+        if: env.SNYK_TOKEN != ''
+      - uses: snyk/actions/python@master
+        if: env.SNYK_TOKEN != ''
+        continue-on-error: true
+        with:
+          args: --file=requirements.txt --severity-threshold=high
+
+  # Fluid Attacks (free/open-source scanner): pending. At the time this
+  # workflow was written, the primary-source invocation for the free tier
+  # could not be verified from this environment (no web-research tool
+  # available in the apply session), and Fluid Attacks' own CI
+  # documentation was reported to be mid-migration with at least one
+  # documented path being a `curl | sh` remote-script install, which is not
+  # an acceptable pattern to pipe into a security pipeline unverified. See
+  # `DECISION_LOG.md` (Phase 10) for the full reasoning. This stub shows
+  # where an official pinned Docker image or GitHub Action would plug in
+  # once verified by someone with primary-source access.
+  #
+  # fluid-attacks:
+  #   name: fluid-attacks (SAST/DAST, pending verification)
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: fluidattacks/<official-action>@<pinned-version>
+  #       with:
+  #         token: ${{ secrets.FLUID_ATTACKS_TOKEN }}

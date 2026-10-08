@@ -295,8 +295,22 @@ Defense-in-depth layers on top of the core API, added across slices 6a-6c:
   done
   # first 10 -> 401 (bad credentials), remaining -> 429 (rate_limited)
   ```
-- **CI security scanning** (slice 6b, `feature/security-ci-scanners`):
-  `bandit`, `pip-audit`, `gitleaks`, GitHub CodeQL, and Dependabot.
+- **CI security scanning** (slice 6b, `.github/workflows/security.yml` +
+  `.github/workflows/codeql.yml` + `.github/dependabot.yml`), all free-tier:
+  - `bandit` (SAST on `src`, medium+ severity, **blocking**).
+  - `pip-audit` (dependency CVEs against the locked `uv.lock` deps,
+    non-blocking — surfaced in the run output).
+  - `gitleaks` (secret scanning, blocking; free for personal repositories).
+  - Trivy (built Docker image, HIGH/CRITICAL with a known fix, blocking).
+  - GitHub CodeQL (Python, weekly + on every push/PR; free on public repos).
+  - Snyk (optional, gated entirely on a `SNYK_TOKEN` repository secret;
+    a no-op without one; non-blocking when it does run).
+  - Fluid Attacks: **pending**. No primary-source-verified free/open-source
+    invocation could be confirmed from this environment (no web-research
+    tool available during this apply session). See `DECISION_LOG.md` for
+    the full reasoning and the commented stub in `security.yml`.
+  - Dependabot: weekly updates for the `pip`, `github-actions`, and
+    `docker` ecosystems, targeting `develop`.
 - **Optional Sentry integration** (slice 6c, `feature/sentry-integration`):
   gated entirely on `SENTRY_DSN`; initialized with `send_default_pii=False`.
 

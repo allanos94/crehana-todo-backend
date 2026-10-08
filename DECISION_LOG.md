@@ -471,3 +471,70 @@ they land in code, not as a batch at the end.
   cleanup, not a silent omission — whoever next has unrestricted
   filesystem access should add the three lines to `.env.example` for
   local-development parity with compose.
+
+## Phase 10: CI Security Scanning (slice 6b, `feature/security-ci-scanners`)
+
+- **Verification method: static workflow validation, not a live GitHub
+  Actions run.** Task 10.5 originally called for pushing the branch and
+  observing `security.yml` run to completion. Per explicit orchestrator
+  instruction for this apply session, pushing/opening PRs is reserved for
+  the orchestrator, so this phase verifies statically instead:
+  `uvx --from actionlint-py actionlint .github/workflows/security.yml
+  .github/workflows/codeql.yml .github/workflows/ci.yml` (exit 0, no
+  findings on any of the three), plus a plain `yaml.safe_load` parse of
+  `.github/dependabot.yml` and both new workflow files. `uvx bandit -r src
+  -ll` and the `uv export --frozen --no-hashes | uvx pip-audit -r -` command
+  were also run directly against this repository (not just syntax-checked):
+  bandit found 0 medium/high findings (8 low-severity, filtered out by
+  `-ll`); pip-audit found no known vulnerabilities in the locked dependency
+  set. Task 10.5 is marked "pending orchestrator observation" in
+  `tasks.md`, not `[x]` — the actual GitHub Actions run against a pushed
+  branch has not happened yet.
+- **Bandit is blocking; pip-audit is non-blocking.** Bandit's `-ll` filter
+  already restricts findings to medium+ severity in our own first-party
+  code, which is cheap to react to immediately. A pip-audit finding is a
+  transitive dependency CVE that may need time to triage or wait on an
+  upstream patch; blocking every PR the instant a new CVE is published
+  would create merge gridlock unrelated to the change under review. Both
+  decisions satisfy the spec's SHOULD-level "surfaced... without blocking
+  merges solely on scanner findings unless explicitly configured" — bandit
+  is the explicit exception, documented here.
+- **Trivy scans the image built from the repository's own `Dockerfile`**
+  (`docker build -t crehana-todo-api:security-scan .`) rather than a
+  registry image, so the scan reflects exactly what would ship.
+  `ignore-unfixed: true` means only vulnerabilities with an available
+  upstream fix can fail the job — an unfixable HIGH/CRITICAL in a base
+  image would otherwise block every PR with no possible remediation.
+- **Snyk is gated entirely on the `SNYK_TOKEN` secret being present**, with
+  every step individually conditioned on `env.SNYK_TOKEN != ''` rather than
+  a single job-level `if`, so the job still appears in the Actions UI (as
+  skipped-to-no-op) instead of disappearing silently, which would be
+  confusing when deciding whether to add the token later. It is
+  `continue-on-error: true` regardless, per the proposal's "non-blocking"
+  guidance for this specific scanner.
+- **Fluid Attacks is pending, not implemented, and not faked.** The
+  orchestrator's explicit instruction was to research the *current*
+  free/open-source scanner invocation from Fluid Attacks' own primary
+  sources (`docs.fluidattacks.com`, `github.com/fluidattacks`) before
+  wiring it, and to never pipe a remote `curl | sh` script into a security
+  pipeline even if that is what their docs show. This apply session has no
+  web-research tool available (no `WebFetch`/`WebSearch`-equivalent in the
+  executor's tool set), so the current invocation could not be verified
+  against a primary source. Rather than guess or copy a possibly-stale
+  pattern, `security.yml` ships a commented-out job stub showing exactly
+  where an official pinned Docker image or GitHub Action would plug in,
+  and this entry records the gap explicitly. **Follow-up required**:
+  whoever next has web access should confirm the current free-tier
+  invocation from the primary sources above and either (a) uncomment and
+  complete the stub, or (b) explicitly decide Fluid Attacks is out of
+  scope and remove the stub with that rationale recorded here.
+- **Dependabot's `pip` ecosystem** is used for the Python dependency
+  updates rather than a dedicated `uv` ecosystem value. GitHub has been
+  adding native `uv.lock` support to Dependabot, but whether it is
+  available as of this repository's Dependabot config could not be
+  confirmed from this environment (same web-access gap as the Fluid
+  Attacks item above). `pip` is the conservative choice: Dependabot's `pip`
+  ecosystem already reads `pyproject.toml`'s PEP 621 `dependencies`/
+  `[dependency-groups]` tables for version constraints, so it still
+  produces useful update PRs even if it does not resolve through
+  `uv.lock` directly. Revisit once `uv` ecosystem support is confirmed.
