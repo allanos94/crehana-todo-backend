@@ -309,7 +309,7 @@ Defense-in-depth layers on top of the core API, added across slices 6a-6c:
     invocation could be confirmed from this environment (no web-research
     tool available during this apply session). See `DECISION_LOG.md` for
     the full reasoning and the commented stub in `security.yml`.
-  - Dependabot: weekly updates for the `pip`, `github-actions`, and
+  - Dependabot: weekly updates for the `uv` (resolves `uv.lock`), `github-actions`, and
     `docker` ecosystems, targeting `develop`.
 - **Optional Sentry integration** (slice 6c, `feature/sentry-integration`):
   gated entirely on `SENTRY_DSN`; initialized with `send_default_pii=False`.

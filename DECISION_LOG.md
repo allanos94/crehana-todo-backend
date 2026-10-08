@@ -528,13 +528,9 @@ they land in code, not as a batch at the end.
   invocation from the primary sources above and either (a) uncomment and
   complete the stub, or (b) explicitly decide Fluid Attacks is out of
   scope and remove the stub with that rationale recorded here.
-- **Dependabot's `pip` ecosystem** is used for the Python dependency
-  updates rather than a dedicated `uv` ecosystem value. GitHub has been
-  adding native `uv.lock` support to Dependabot, but whether it is
-  available as of this repository's Dependabot config could not be
-  confirmed from this environment (same web-access gap as the Fluid
-  Attacks item above). `pip` is the conservative choice: Dependabot's `pip`
-  ecosystem already reads `pyproject.toml`'s PEP 621 `dependencies`/
-  `[dependency-groups]` tables for version constraints, so it still
-  produces useful update PRs even if it does not resolve through
-  `uv.lock` directly. Revisit once `uv` ecosystem support is confirmed.
+- **Dependabot uses the native `uv` ecosystem.** Dependabot version updates
+  support `uv` (GA since 2025-03-13) and security updates for `uv.lock` are
+  also supported, so updates resolve through `uv.lock` instead of only
+  reading `pyproject.toml` constraints. Sources:
+  https://github.blog/changelog/2025-03-13-dependabot-version-updates-now-support-uv-in-general-availability/
+  and https://docs.astral.sh/uv/guides/integration/dependabot/
