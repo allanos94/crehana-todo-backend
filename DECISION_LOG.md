@@ -1,567 +1,313 @@
 # Decision Log — Todo Lists API
 
-Records what was decided and why, across the plan (`openspec/changes/todo-api/`)
-and anything confirmed with the user after the explore phase. Pending items are
-tracked explicitly rather than silently dropped.
+Records what was decided and why: the stack/architecture decisions from the
+plan (`openspec/changes/todo-api/design.md`), the product decisions
+confirmed with the user after the explore phase, what changed or was
+discovered slice by slice, and what is deliberately deferred. Pending items
+are tracked explicitly rather than silently dropped.
 
-## Plan Decisions
+## A. Stack & Architecture Decisions
 
-| # | Decision | Rationale | Source |
-|---|----------|-----------|--------|
-| 1 | `uv_build` as the PEP 517 build backend for the `src` layout | Native to `uv`, no extra dependency | design.md ADR-15 |
-| 2 | VARCHAR + CHECK instead of native PostgreSQL ENUM for `status`/`priority` | Alembic autogenerate does not detect enum value changes; plain migrations are simpler to evolve | design.md ADR-08 |
-| 3 | `/health/ready` added as a spec delta in the bootstrap slice | User-confirmed decision not present in the original spec; readiness probe runs `SELECT 1` | tasks.md 0.6, specs/project-bootstrap/spec.md |
-| 4 | The full `AppError` hierarchy (design ADR-03) is written once, in slice 1a, including concrete errors only used by later slices | Keeps `domain/exceptions.py` a stable file that never reopens per feature slice | tasks.md 1.4 |
-| 5 | `AuthenticationError` lives in `application/exceptions.py`, not `domain/exceptions.py`, even though it subclasses `AppError` | Authentication is an application/infrastructure boundary concern, not a domain concept | design.md ADR-03 |
-| 6 | VARCHAR(320)+`UniqueConstraint` for `users.email`, not a bare `unique=True` column flag | Deterministic, explicit constraint name (`uq_users_email`) that `SqlAlchemyUnitOfWork`'s `IntegrityError` translation depends on | design.md ADR-07/ADR-08 |
-| 7 | Alembic `env.py` supports both an injected `config.attributes["connection"]` (used by tests, via `engine.begin()` + `run_sync`) and the async-engine path (used by the CLI) | Lets `command.upgrade`/`downgrade` run synchronously inside an already-open async connection without nesting `asyncio.run` inside a running loop | design.md ADR-09, Context7 verification items |
+The 13 architecture/stack decisions from `design.md`'s ADR-01–ADR-13 (the
+two remaining design ADRs — testing architecture and packaging/Docker/CI —
+are implementation detail already covered by this README's "Running tests"
+and "Local setup"/"Docker" sections and by the per-slice notes in Section C
+below, so they are not duplicated here as top-level architecture decisions).
 
-## Post-Explore Product Decisions
+| # | Decision | Rationale | Alternatives considered | Source |
+|---|----------|-----------|--------------------------|--------|
+| 1 | Three layers (`domain` / `application` / `infrastructure`) under `src/app/`, with the dependency rule mechanically enforced by an AST test; all business routes under `/api/v1`, health probes unversioned | Layers stay visible to the evaluator, the rule can't silently rot, and per-feature application subpackages keep slices reviewable | Package-by-feature at the top level (challenge asks for visible layers); `import-linter` (extra dependency when a 30-line AST test suffices); repository Protocols living in `application` instead of `domain` | design.md ADR-01 |
+| 2 | Domain entities are mutable, slotted dataclasses mutated only through intention-revealing methods; value objects are immutable `StrEnum`s and pure validator functions; the task status state machine is strict (4 valid edges only, same-status → 409, no implicit no-op) | Entities have identity and a lifecycle, so mutating methods keep invariants in one place; value objects have no identity, so immutability is free | Frozen dataclasses + `dataclasses.replace` (rebuild-and-reassign noise); Pydantic domain models (breaks the framework-free domain rule) | design.md ADR-02 |
+| 3 | `AppError` base + four category classes (`NotFoundError`, `ConflictError`, `BusinessRuleViolationError`, `AuthenticationError`), resolved to an HTTP status via `type(exc).__mro__` — no domain class knows about HTTP | One table owns the contract, the domain stays HTTP-agnostic, and a new concrete error needs zero handler changes | Raising `HTTPException` from use cases (leaks the framework into the application layer); a status code on each domain exception (puts an HTTP concept in the domain) | design.md ADR-03 |
+| 4 | One class per use case (`execute(command) -> result`); commands/results are frozen, slotted dataclasses; a typed `UNSET` sentinel distinguishes "untouched" from "clear" on PATCH | The smallest typed surface that keeps the application layer framework-free and testable with fakes | `__call__` instead of `execute` (less explicit, less mypy-friendly); Pydantic DTOs in the application layer (breaks framework independence); a dedicated output view model per use case (no payoff at this size) | design.md ADR-04 |
+| 5 | Ports (`Clock`, `PasswordHasher`, `TokenService`, `NotificationService`, `UnitOfWork`, plus repositories) are `typing.Protocol`s, not ABCs; `PasswordHasher` is `async` | Protocols give structural typing, so fakes need no inheritance; Argon2 is deliberately CPU-heavy, so hashing is offloaded with `asyncio.to_thread` instead of blocking the event loop | ABCs (force inheritance on every fake); a synchronous hasher (blocks the loop under concurrent logins) | design.md ADR-05 |
+| 6 | Authorization is one application-layer policy, `AccessPolicy` (`owned_list`, `owned_task`, `status_changeable_task`), not scattered per-router or per-repository checks | One testable place for the owner/assignee/stranger matrix — the proposal's main data-leak risk | Router-level dependencies (duplicate rules, can't unit-test with fakes); owner-scoped SQL baked into every repository method (spreads the policy across adapters; can't express the assignee rule uniformly) | design.md ADR-06 |
+| 7 | One `AsyncSession` per use-case execution via an async Unit of Work (`async with self._uow:` commits or rolls back); `expire_on_commit=False`; no ORM `relationship()`s — cascades are database-level; `IntegrityError` is translated to domain errors by constraint name | Keeps lazy-loading structurally impossible (domain objects are never ORM instances) and makes "notify only after commit" unambiguous | A session dependency that commits in its own teardown (hides commit errors, makes post-commit notification ambiguous); exposing ORM models as entities (couples the domain to SQLAlchemy) | design.md ADR-07 |
+| 8 | `VARCHAR` + `CHECK` for `status`/`priority` instead of native PostgreSQL `ENUM`; a deterministic `MetaData` naming convention; database-level cascades (`ON DELETE CASCADE` / `SET NULL`); a functional unique index for case-insensitive per-owner list names; no DB `CHECK` for `due_date >= today` (PostgreSQL `CHECK` constraints must be immutable, so that rule lives in the domain) | Keeps the same DB-level guarantee as a native enum with plain, autogenerate-friendly migrations | Native PostgreSQL `ENUM` (`ALTER TYPE` needed for value changes, Alembic autogenerate doesn't detect them, and create/drop ordering is a known downgrade pitfall) | design.md ADR-08 |
+| 9 | `alembic.ini` at the repo root with a package-resource `script_location` (works from both an editable checkout and the non-editable installed image); one migration per schema slice, each with a working `downgrade()`; `docker/entrypoint.sh` runs `alembic upgrade head` before `uvicorn` starts | A real migration history with working rollbacks, which the challenge evaluates, without an extra moving part | `Base.metadata.create_all()` at startup (no history, no downgrade); a separate compose `migrate` service (one more moving part for a single-node demo) | design.md ADR-09 |
+| 10 | `TaskRepository.search` runs two SQL statements: one `FILTER`-aggregate query for whole-list counts (backing `completion_percentage`, filter-independent) and one separate paged `SELECT` for `items`; the percentage itself is computed in the domain from the raw integers | Keeps the percentage rounding unit-testable without a database, and the SQL layer only ever returns integers | Computing the percentage over loaded rows in Python (loads the entire list); `count(*) OVER ()` (the total disappears once `offset` passes the end); three separate count queries (the `FILTER` clauses collapse them into one) | design.md ADR-10 |
+| 11 | PyJWT HS256 (`sub`/`type`/`iat`/`exp`/`jti` claims); `HTTPBearer(auto_error=False)` so the auth dependency can distinguish "no header" from "bad header"; `pwdlib` Argon2 hashing with a module-level dummy hash so login timing never reveals whether an email is registered | Simplest correct option for a single service with no key-distribution need, and the dummy-hash trick closes a real timing side-channel for free | `OAuth2PasswordBearer` (forces a form-encoded `username` field; `HTTPBearer` keeps Swagger's "Authorize" box working with a pasted token); RS256 (no key distribution need for one service); `python-jose`/`passlib` (unmaintained) | design.md ADR-11 |
+| 12 | `AssignTask` notifies only *after* a successful commit, and only when the new assignee is non-null and different from the previous one; notification delivery runs through `BackgroundTasks` so it never blocks the response | The ordering is a unit-tested application rule, the use case never imports FastAPI, and delivery is non-blocking | The router scheduling `BackgroundTasks` itself from a returned DTO (moves the "after commit" rule out of the tested use case); a transactional outbox (overkill for a fake email) | design.md ADR-12 |
+| 13 | `register_exception_handlers(app)` plus one `ErrorResponse` schema (`{code, message, details?}`); `RequestValidationError` details drop Pydantic's `input`/`ctx` keys so a submitted password is never echoed back; every router declares `responses={...}` so `/docs` documents the contract | Keeps the error shape uniform across every failure path, including ones FastAPI itself raises, without ever leaking submitted values | (Folded into ADR-03's category-map design — see row 3; no separate alternative was evaluated beyond that mapping) | design.md ADR-13 |
 
-Confirmed with the user during the explore/planning session; recorded here as
-they land in code, not as a batch at the end.
+## B. Post-Explore Product Decisions
 
-| # | Decision | Notes |
-|---|----------|-------|
-| 1 | API versioned under `/api/v1` from day one; `/health`, `/health/ready` stay unversioned at the root | design.md ADR-01 |
-| 2 | Delivery via 11 gitflow slices (+1 optional), one PR per slice into `develop`, final `release/1.0.0` → `main` tagged `v1.0.0` | tasks.md Review Workload Forecast |
+Confirmed with the user during the explore/planning session (`explore.md`'s
+8 open product questions, expanded as later slices raised new ones);
+recorded here as they land in code, not as a batch at the end.
 
-## Pending / Deferred
+| # | Decision | Rationale / notes | Source |
+|---|----------|---------------------|--------|
+| 1 | Field limits: list `name` ≤ 120 chars, `description` ≤ 2000 chars (lists and tasks); task `title` ≤ 200 chars | Non-blank-after-trim, length-capped `InvalidFieldError` (422) on violation | explore.md Q1, proposal.md scope, `value_objects.py` |
+| 2 | A task list's `name` is unique per owner, compared case-insensitively → 409 `task_list_name_conflict` | Checked in the application layer for a friendly error, backed by a functional unique index for race safety under concurrency | explore.md Q2, proposal.md scope, design.md ADR-08 |
+| 3 | Assignee middle-ground permissions: a non-owner assignee may `GET /users/me/tasks` and `PATCH .../status` on their own assigned task only; every other verb, and the rest of the list, returns 404 | Avoids full shared-list semantics while still letting the assignee act on their one task; never 403, so ownership can't be probed | explore.md Q3, proposal.md "Assignee visibility (middle ground)", design.md ADR-06 |
+| 4 | Self-service registration (`POST /auth/register`) — no pre-seeded users or admin-invite flow | Simplest onboarding that still satisfies the JWT-auth bonus | explore.md Q4, proposal.md "Users and authentication" |
+| 5 | The fake invitation only ever targets an existing registered user; there is no invite-to-sign-up flow | An unknown `assignee_id` is rejected (422 `assignee_not_found`) before any notification is built | explore.md Q5, proposal.md Out of Scope, design.md ADR-12 |
+| 6 | Deleting a task list cascades its tasks at the database level (`ON DELETE CASCADE`); deleting a user sets `tasks.assignee_id` to `NULL` (`ON DELETE SET NULL`) rather than blocking or cascading | Keeps deletion simple and avoids orphaned rows without silently deleting a task because its assignee's account was removed | explore.md Q6, proposal.md scope, design.md ADR-08 |
+| 7 | `due_date` is an optional calendar date (no time component) that must not be earlier than **today in UTC**, read from an injected `Clock`, never the system wall clock directly | Keeps the rule deterministic and testable; re-validated only when a `PATCH` actually touches the field | explore.md Q7, proposal.md scope, design.md ADR-02, `ensure_due_date_not_past` |
+| 8 | Password policy: 8–128 characters, at least one letter and one digit | A minimal policy beyond "hash with Argon2" that still blocks trivially weak passwords | explore.md Q8, proposal.md scope, design.md ADR-02/ADR-11 |
+| 9 | A same-status transition (e.g. `pending → pending`) is a 409 `invalid_status_transition`, identical to any other invalid edge — there is **no implicit no-op success path** | An idempotent alternative (returning 200 with no state change for a same-status request) was explicitly considered and **rejected**: the state machine is strict by design, and a same-status PATCH is treated as a client error like every other invalid edge, not as a harmless no-op | tasks.md Phase 5 notes, design.md ADR-02 |
+| 10 | An unknown `assignee_id` returns 422 `assignee_not_found`, not 404 | The bad value lives in the request *body*, not the URL path — 404 is reserved for path resources (list/task), 422 for a business-rule violation on a field | design.md ADR-03 |
+| 11 | All business routes are versioned under `/api/v1` from day one; `/health` and `/health/ready` stay unversioned at the root | Versioning from day one avoids a breaking migration later; probes are infrastructure concerns, not API surface | design.md ADR-01 |
+| 12 | `status`/`priority` are stored as `VARCHAR` + `CHECK`, not native PostgreSQL `ENUM` | Confirmed with the user as a product-facing tradeoff (schema evolvability over native-enum strictness), not just an internal implementation choice — see Section A, row 8, for the full rationale | design.md ADR-08 |
+| 13 | `priority` defaults to `medium` when omitted on task creation | No default is specified anywhere in the challenge PDF, the spec, or the design doc for this field; every documented spec scenario supplies `priority` explicitly, so this default never contradicts a documented scenario. Filled as a product gap during Phase 6 (Tasks API), not a design deviation | tasks.md Phase 6 notes, `CreateTaskRequest` schema |
 
-| Item | Status | Planned slice |
-|------|--------|---------------|
-| Refresh-token rotation and denylist | Deferred, documented as a known gap | n/a (out of scope) |
-| Shared lists / collaboration | Out of scope | n/a |
-| Real email delivery | Out of scope — console/log notifier only | Phase 8 |
+## C. Implementation Notes by Slice
 
-## Bootstrap Slice (Phase 0) Notes
+Per-slice discoveries, deviations, and clarifications, in delivery order.
+Decisions already captured in Sections A/B are not repeated here.
 
-- `uv_build` backend configured with `module-name = "app"`, `module-root = "src"`
-  (package name `app` differs from the distribution name `todo-api`).
-- `pytest.ini` starts with `--cov-fail-under=0` since there is no application
-  code to meaningfully cover yet; raised to `75` starting with slice 1a.
-- A minimal async engine/session factory (`infrastructure/db/session.py`) was
-  added ahead of slice 1a's full persistence layer, strictly to back
-  `/health/ready`'s `SELECT 1` check. The declarative base, ORM models,
-  mappers, repositories, and Unit of Work still land in slice 1a as planned.
-- `testcontainers.postgres` emits a `DeprecationWarning` recommending
-  `testcontainers.community.postgres` (observed against the pinned version
-  in `uv.lock`); revisit the import path when slice 1a's integration harness
-  is built.
-- `docker/entrypoint.sh` conditionally runs `alembic upgrade head` only when
-  `alembic.ini` exists, so it is a true no-op until slice 1a adds it — no
-  entrypoint change needed then.
+### Phase 0: Bootstrap (Slice 0, `feature/bootstrap-project`, PR 1)
 
-## Auth Foundation Slice (Phase 1 / Slice 1a) Notes
+- `uv_build` backend configured with `module-name = "app"`, `module-root =
+  "src"` (the package name `app` differs from the distribution name
+  `todo-api`).
+- `pytest.ini` started at `--cov-fail-under=0` (no application code yet);
+  raised to `75` starting Phase 1.
+- A minimal async engine/session factory was added ahead of Phase 1's full
+  persistence layer, strictly to back `/health/ready`'s `SELECT 1` check.
+- `/health/ready` (readiness, runs `SELECT 1`) was added as a spec delta —
+  a user-confirmed decision not present in the original spec (tasks.md 0.6,
+  `specs/project-bootstrap/spec.md`).
+- `docker/entrypoint.sh` conditionally ran `alembic upgrade head` only when
+  `alembic.ini` existed at that point, so it was a true no-op until Phase 1
+  added migrations.
 
-- Context7 MCP tools were not present in this session's tool list either (as
-  in Phase 0). `script_location = app.infrastructure.db:alembic`
-  (package-resource syntax) was verified empirically: `uv run alembic -c
-  alembic.ini heads` resolves `0001_users` without a DB connection, and the
-  full `docker compose up --build --wait` run proved it also works from the
-  non-editable installed package inside the image (both containers reached
-  `healthy`, and `psql \dt` showed `users` + `alembic_version` afterward).
-- `sa.Enum(native_enum=False, create_constraint=True, values_callable=...)`
-  is **not yet exercised**: migration `0001_users` has no enum columns
-  (`TaskStatus`/`Priority` land in slice 3a/3b). Verification of that exact
-  signature is deferred to Phase 5, where it is first needed.
+### Phase 1: Auth Foundation (Slice 1a, `feature/auth-foundation`, PR 2)
+
+- The full `AppError` hierarchy (ADR-03) was written once here, including
+  concrete errors only used by later slices, so `domain/exceptions.py`
+  never reopens per feature slice.
+- `script_location = app.infrastructure.db:alembic` (package-resource
+  syntax) was verified empirically (no Context7 access this session):
+  `uv run alembic -c alembic.ini heads` resolves `0001_users` without a DB
+  connection, and a full `docker compose up --build --wait` run proved it
+  also works from the non-editable installed package inside the image.
 - `IntegrityError` → domain-error translation reads
-  `exc.orig.__cause__.constraint_name`, confirmed empirically by
-  `tests/integration/test_user_repository.py::test_duplicate_email_raises_conflict`
-  against the real asyncpg driver.
+  `exc.orig.__cause__.constraint_name`, confirmed empirically against the
+  real asyncpg driver.
 - `docker/entrypoint.sh` now unconditionally runs `alembic upgrade head`
-  (no longer gated on `alembic.ini` existing — it always exists from this
-  slice on). The Dockerfile's bracket-glob `COPY alembic.in[i]` was
-  simplified to a plain `COPY alembic.ini` for the same reason.
-- `tests/__init__.py` and `tests/unit/__init__.py` were added so
-  `tests/unit/fakes.py` can be imported as `from tests.unit.fakes import
-  ...` from multiple test modules (pytest's default "prepend" import mode
-  needs real packages for dotted cross-module imports); `tests/integration`
-  already had its own `__init__.py`.
+  (`alembic.ini` always exists from this slice on).
+- `AuthenticationError` lives in `application/exceptions.py`, not
+  `domain/exceptions.py`, even though it subclasses `AppError`:
+  authentication is an application/infrastructure boundary concern, not a
+  domain concept (design.md ADR-03).
 
-## Auth JWT Slice (Phase 2 / Slice 1b) Notes
+### Phase 2: Auth JWT (Slice 1b, `feature/auth-jwt`, PR 3)
 
-- Context7 check (task 2.2), verified by the orchestrator against installed
-  versions `pwdlib==0.3.1`, `pyjwt==2.15.1`, `fastapi==0.142.4`:
-  - `pwdlib`: `PasswordHash((Argon2Hasher(),))` with `.hash(pw) -> str` and
-    `.verify(pw, hash) -> bool`. Both are CPU-bound/sync, wrapped in
-    `asyncio.to_thread` in `Argon2PasswordHasher`.
-  - PyJWT: `jwt.encode(payload, key, algorithm="HS256")`;
-    `jwt.decode(token, key, algorithms=["HS256"], options={"require": [...]})`.
-    `sub` must be a string (`str(user_id)`); `exp`/`iat` accept aware UTC
-    `datetime` instances directly (PyJWT converts to Unix timestamps,
-    truncating microseconds). Errors: catch the base `jwt.InvalidTokenError`
-    (covers `ExpiredSignatureError`, `MissingRequiredClaimError`, signature
-    and format failures) and map it to the app's `InvalidTokenError`.
-  - FastAPI: `HTTPBearer()` with default `auto_error=True` now returns 401 (not
-    403) with a `WWW-Authenticate: Bearer` header. The design still uses
-    `HTTPBearer(auto_error=False)` so the dependency can distinguish "no
-    header" (`NotAuthenticatedError`) from "bad header"
-    (`InvalidTokenError`), both mapped to 401 by the existing error contract.
-  - Confirmed empirically: PyJWT validates `iat` against the real wall clock
-    regardless of any injected `Clock` used to build the payload — an `iat`
-    in the future raises `ImmatureSignatureError`. `JwtTokenService` still
-    takes all times from the injected `Clock` per design (never
-    `datetime.now()` directly), but `tests/unit/test_jwt.py`'s "valid token"
-    cases issue at the real current time, and only the expired-token case
-    uses a `Clock` fixed to a date in the past, so `exp` is in the past too.
-- All business routers mount under `/api/v1` (already a confirmed decision,
-  design ADR-01); `auth`/`users` routers follow the same prefix.
-- `HTTPBearer(auto_error=False)` was used over `OAuth2PasswordBearer` (design
-  ADR-11 alternative): `OAuth2PasswordBearer` forces a form-encoded login
-  with a `username` field, while `HTTPBearer` still gives `/docs` an
-  "Authorize" box where a pasted token works, and `auto_error=False` lets
-  `get_current_user_id` distinguish "no header" (`NotAuthenticatedError`)
-  from "bad header" (`InvalidTokenError`).
-- RS256 was rejected (design ADR-11 alternative): there is a single service
-  and no key-distribution need, so HS256 with a shared secret is simpler.
+- Confirmed empirically: PyJWT validates `iat` against the real wall clock
+  regardless of any injected `Clock` used to build the payload — an `iat`
+  in the future raises `ImmatureSignatureError`. `JwtTokenService` still
+  takes all times from the injected `Clock` (never `datetime.now()`
+  directly); only the expired-token test case uses a `Clock` fixed in the
+  past.
 - Refresh-token rotation and a revocation denylist are explicitly **not**
-  implemented in this slice (tracked in the Pending/Deferred table below).
-  `jti` is already included in every token's claims so a future denylist
-  has something to key on without another migration.
+  implemented in this slice (tracked in Section D). Every token already
+  carries a `jti` claim so a future denylist has something to key on
+  without another migration.
 - `WWW-Authenticate: Bearer` is added to every `AuthenticationError`
-  response (401) via `infrastructure/api/errors.py`, beyond the "nice to
-  have" note in the task — the change was a one-line conditional in the
-  existing handler, so there was no reason to skip it.
+  response (401) via `infrastructure/api/errors.py`.
 
-## Task Lists Core Slice (Phase 3 / Slice 2a) Notes
+### Phase 3: Task Lists Core (Slice 2a, `feature/task-lists-core`, PR 4)
 
 - Per-owner, case-insensitive `TaskList` name uniqueness is enforced in the
   application layer (`_ensure_name_available`, shared by `CreateTaskList`
-  and `UpdateTaskList`), not in the router — this is a confirmed design
-  position (ADR-06/ADR-07), and slice 2b's functional unique index backs it
-  for race safety under concurrency.
-- Renaming excludes the list's own id from the uniqueness check
-  (`UpdateTaskList` normalizes via `task_list.rename(...)` first, then
-  checks `name_exists(..., exclude_id=task_list.id)`), so renaming `Work`
-  to `work` succeeds.
-- `AccessPolicy` (`application/authorization.py`) is the single place that
-  resolves owner/non-owner/missing-resource into either the entity or
-  `TaskListNotFoundError` (404) — a stranger and a missing list are
-  indistinguishable to the caller, never 403, per the task-lists spec.
-- `UnitOfWork.task_lists` and `FakeUnitOfWork`'s rollback snapshot were
-  extended from a single-repository tuple to a two-repository tuple; the
-  auth use cases/tests needed no changes because `FakeUnitOfWork()` still
-  default-constructs both repositories.
-- No DB/API surface exists yet for task lists (fakes-only, per the 2a/2b
-  split) — `tests/integration/*` and the HTTP router land in Phase 4
-  (slice 2b).
+  and `UpdateTaskList`), not in the router — Phase 4's functional unique
+  index backs it for race safety under concurrency.
+- Renaming excludes the list's own id from the uniqueness check, so
+  renaming `Work` to `work` succeeds.
+- No DB/API surface exists yet for task lists at this point (fakes-only,
+  per the 2a/2b split).
 
-## Task Lists API Slice (Phase 4 / Slice 2b) Notes
+### Phase 4: Task Lists API (Slice 2b, `feature/task-lists-api`, PR 5)
 
-- Context7 MCP tools were not present in this session's tool list (as in
-  every prior slice), so the functional unique index was **not**
-  autogenerate-verified against SQLAlchemy/Alembic docs. Per explicit
-  orchestrator instruction, `versions/0002_task_lists.py` was written by
-  hand — `op.create_index("uq_task_lists_owner_id_lower_name",
-  "task_lists", ["owner_id", sa.text("lower(name)")], unique=True)` —
-  rather than relying on Alembic autogenerate to detect it, and the model
-  mirrors it with a standalone `Index("uq_task_lists_owner_id_lower_name",
-  TaskListModel.owner_id, func.lower(TaskListModel.name), unique=True)`
-  declared after the class body (a functional index cannot be expressed
-  inside `__table_args__`, which has no name to reference the not-yet-built
-  class). **Verified empirically** against real Postgres 16 (installed
-  SQLAlchemy 2.1.4 / Alembic 1.20.0):
-  `tests/integration/test_task_list_repository.py::test_functional_unique_index_raises_on_case_insensitive_collision`
-  inserts `"Groceries"` then `"GROCERIES"` for the same owner through two
-  separate `SqlAlchemyUnitOfWork` transactions and confirms the second
-  `commit()` raises `IntegrityError` translated to
-  `DuplicateTaskListNameError` — the same
-  `exc.orig.__cause__.constraint_name` pattern already proven for
-  `uq_users_email` in slice 1a. The migration round-trip test
-  (`test_migrations.py::test_downgrade_base_then_upgrade_head`) also
-  re-ran clean through `0001` + `0002`, confirming `0002`'s `downgrade()`
-  drops both indexes before the table.
+- The functional unique index was **not** autogenerate-verified against
+  SQLAlchemy/Alembic docs (no Context7 access this session either), so
+  `versions/0002_task_lists.py` was written by hand:
+  `op.create_index("uq_task_lists_owner_id_lower_name", "task_lists",
+  ["owner_id", sa.text("lower(name)")], unique=True)`. **Verified
+  empirically** against real Postgres 16: inserting `"Groceries"` then
+  `"GROCERIES"` for the same owner through two separate
+  `SqlAlchemyUnitOfWork` transactions confirms the second `commit()` raises
+  `IntegrityError` translated to `DuplicateTaskListNameError`.
 - Per-owner case-insensitive uniqueness is checked twice, by design: the
-  application layer (`_ensure_name_available`, slice 2a) gives a friendly
-  409 on the common case, and the DB's functional unique index is the
-  race-safety backstop under concurrency — both paths raise the same
-  `DuplicateTaskListNameError`.
-- `TaskListRepository.update` loads the row via `session.get(...)` (SQLAlchemy's
-  identity map) and assigns the three mutable fields, the same pattern
-  ADR-07 describes; it does not use a bulk `UPDATE` statement.
+  application layer gives a friendly 409 on the common case, and the DB's
+  functional unique index is the race-safety backstop under concurrency.
 - `UpdateTaskListCommand.name` is typed `str | None | Unset` (not
-  `str | Unset`): the PATCH schema allows `name` to be absent (`UNSET`,
-  untouched) or a string, but an explicit JSON `null` is a distinct,
-  invalid state (`name` is a required field and cannot be cleared) that
-  `UpdateTaskList` now rejects with `InvalidFieldError` (422) instead of
-  crashing on `None.strip()`.
-- `tests/integration/test_task_lists_flow.py`'s end-to-end flow test was
-  not written against a confirmed-failing implementation (no RED
-  observed) — the same honest "combined cycle" deviation documented for
-  every prior slice's integration flow test: the use cases and HTTP layer
-  were already complete and unit-tested by the time it was written, so
-  there was no missing-code shape to fail against. It passed on first run
-  against real Postgres; no prior failing run was discarded.
+  `str | Unset`): an explicit JSON `null` is a distinct, invalid state
+  (`name` is required and cannot be cleared), rejected with
+  `InvalidFieldError` (422) instead of crashing on `None.strip()`.
 
-## Tasks Core Slice (Phase 5 / Slice 3a) Notes
+### Phase 5: Tasks Core (Slice 3a, `feature/tasks-core`, PR 6)
 
-- The task status state machine is strict by design and is a **confirmed
-  product decision, not an oversight**: only the four edges
-  `pending -> in_progress`, `in_progress -> pending`, `in_progress -> done`,
-  and `done -> in_progress` are valid. Every other request, including a
-  same-status transition such as `pending -> pending`, raises
-  `InvalidStatusTransitionError` (409). `can_transition()` and the
-  `_TRANSITIONS` table in `value_objects.py` encode exactly this; there is
-  no implicit "no-op success" path for a same-status PATCH.
 - `due_date` validation lives in the domain (`ensure_due_date_not_past`,
-  called from both `Task.create` and `Task.reschedule`) and is compared
-  against `Clock.today()`, never the system wall clock directly, so tests
-  stay deterministic and the rule is reusable on both create and update.
-- `UpdateTask` only re-validates `due_date` when the PATCH actually
-  touches it (`command.due_date is not UNSET`): an unrelated field update
-  on a task whose stored `due_date` has since passed in real time does not
-  fail, proven by
-  `test_task_use_cases.py::test_update_task_due_date_validated_only_when_patched`.
+  called from both `Task.create` and `Task.reschedule`), compared against
+  `Clock.today()`, never the system wall clock directly.
+- `UpdateTask` only re-validates `due_date` when the PATCH actually touches
+  it: an unrelated field update on a task whose stored `due_date` has since
+  passed in real time does not fail.
 - `AccessPolicy.owned_task` checks list ownership first
-  (`owned_list`, raising `TaskListNotFoundError`) and only then task
-  membership (`TaskNotFoundError`): a stranger who does not own the list at
-  all never reaches the task-membership check. Both exceptions map to 404,
-  so the distinction is invisible over HTTP — it only matters for which
-  domain exception a use-case test asserts.
-- `ChangeTaskStatus` in this slice is the **owner-only** path
-  (`AccessPolicy.owned_task`). The assignee path
-  (`AccessPolicy.status_changeable_task`, owner OR assignee) is Phase 8;
-  until then, an assignee has no special status-change privilege yet
-  because `assignee_id` cannot be set before Phase 8's `AssignTask` use
-  case exists.
-- "Invalid priority value" (tasks spec scenario) is validated at the API
-  schema boundary (Pydantic enum field, Phase 6/6.4-6.5), not re-tested as
-  a domain-level use-case scenario here: `CreateTaskCommand.priority` is
-  already typed `Priority`, so an invalid string can never reach
-  `CreateTask.execute` in the first place at this layer. This mirrors how
-  `email` format validation works in the auth slices (`EmailStr` at the
-  boundary, not re-validated in the domain).
+  (`TaskListNotFoundError`) and only then task membership
+  (`TaskNotFoundError`); both map to 404, so the distinction is invisible
+  over HTTP.
+- `ChangeTaskStatus` in this slice is the **owner-only** path; the assignee
+  path (`status_changeable_task`) is Phase 8, since `assignee_id` cannot be
+  set before Phase 8's `AssignTask` use case exists.
 
-## Tasks API Slice (Phase 6 / Slice 3b) Notes
+### Phase 6: Tasks API (Slice 3b, `feature/tasks-api`, PR 7)
 
-- `assignee_id` ships now (migration `0003_tasks`, `TaskModel.assignee_id`)
-  even though the assignment use cases land in Phase 8, per design ADR-08,
-  so Phase 8 needs no further schema change: `UUID NULL FK users(id) ON
-  DELETE SET NULL`.
-- **Discovered CHECK-constraint naming gotcha** (SQLAlchemy, confirmed
-  empirically against real Postgres 16): under `MetaData`'s
-  `naming_convention` (`db/base.py`), an explicitly-named `CheckConstraint`
-  still has the `"ck"` convention template applied to it, substituting the
-  *given* name as the `%(constraint_name)s` token — unlike
+- `assignee_id` ships now (migration `0003_tasks`) even though assignment
+  use cases land in Phase 8, per design ADR-08, so Phase 8 needs no further
+  schema change.
+- **CHECK-constraint naming gotcha** (confirmed empirically against real
+  Postgres 16): under `MetaData`'s `naming_convention`, an explicitly-named
+  `CheckConstraint` still has the `"ck"` convention template applied to it,
+  substituting the *given* name as the `%(constraint_name)s` token — unlike
   `UniqueConstraint`/`ForeignKeyConstraint`/`Index`, where an explicit name
   bypasses the convention entirely. Passing an already-prefixed name (e.g.
-  `name="ck_tasks_status"`) therefore produces a doubled
-  `ck_tasks_ck_tasks_status` constraint in the actual DB. `versions/0003_tasks.py`
-  and `TaskModel.__table_args__` pass the bare token (`name="status"`,
-  `name="priority"`, `name="title_not_blank"`) instead, consistent with how
-  `TaskModel`'s `sa.Enum(..., name="status")` already worked correctly.
-  Verified via
-  `tests/integration/test_task_repository.py::test_status_check_constraint_rejects_invalid_value`
-  and `::test_priority_check_constraint_rejects_invalid_value`, which bypass
-  the ORM/domain entirely with a raw `INSERT` to prove the DB-level CHECK
-  is the backstop.
+  `name="ck_tasks_status"`) therefore doubles it in the real DB.
+  `versions/0003_tasks.py` and `TaskModel.__table_args__` pass the bare
+  token (`name="status"`, `name="priority"`, `name="title_not_blank"`)
+  instead.
   - **Pre-existing, out-of-scope finding**: `0002_task_lists.py`'s
-    `ck_task_lists_name_not_blank` (Phase 4, already merged) has this exact
-    same doubling in the real DB (`ck_task_lists_ck_task_lists_name_not_blank`),
-    since it was also given an already-prefixed name under the same naming
-    convention. This is harmless in practice — the domain layer already
-    rejects a blank `name` before any INSERT is attempted, so the
-    constraint's exact name only matters for a direct-SQL bypass, and the
-    CHECK itself still fires correctly regardless of its name — but it is
-    flagged here rather than silently fixed on this branch, since
+    constraint was named `name="ck_task_lists_name_not_blank"` (already
+    prefixed), so the same convention doubles it in the real database to
+    `ck_task_lists_ck_task_lists_name_not_blank`. Verified directly by
+    reading the migration source. This is harmless in practice — the
+    domain layer already rejects a blank `name` before any `INSERT` is
+    attempted, and the `CHECK` still fires correctly regardless of its
+    name — but it is flagged here rather than silently fixed, since
     `0002_task_lists.py` belongs to an already-merged, out-of-scope PR.
-- `priority` has no default specified anywhere in the spec, design, or
-  proposal. This slice fills that gap with `Priority.MEDIUM` as the
-  `CreateTaskRequest` schema default when the field is omitted — every
-  spec scenario for creation supplies `priority` explicitly, so this
-  default never contradicts a documented scenario; it is a product-gap
-  decision made here, not a design deviation.
-- `SqlAlchemyUnitOfWork`'s `_CONSTRAINT_ERRORS` map is intentionally
-  unchanged by this slice: no new *unique* constraint needs a friendly
-  domain-error translation (the task table's new FKs and CHECKs are not in
-  the map), and task 6.7's regression test
-  (`test_unmapped_constraint_violation_is_re_raised_unmodified`) confirms
-  an unmapped constraint violation (`fk_tasks_list_id_task_lists`)
-  propagates as the raw `IntegrityError`, never silently swallowed.
-- `tests/integration/test_tasks_flow.py`'s end-to-end flow test was not
-  written against a confirmed-failing implementation (no RED observed) —
-  the same honest "combined cycle" deviation documented for every prior
-  slice's integration flow test: it passed on first run against real
-  Postgres; no prior failing run was discarded.
+    See Section D.
+- `SqlAlchemyUnitOfWork`'s constraint-error map is intentionally unchanged
+  by this slice: no new *unique* constraint needs a friendly domain-error
+  translation, and an unmapped constraint violation propagates as the raw
+  `IntegrityError`, never silently swallowed.
 
-## Filters, Pagination, Completion Slice (Phase 7 / Slice 4) Notes
+### Phase 7: Filters, Pagination, Completion (Slice 4, `feature/task-filters-completion`, PR 8)
 
-- `completion_percentage` is computed with `Decimal` arithmetic and
-  `ROUND_HALF_UP` quantization to `0.01`, never Python floating-point
-  division directly, so rounding is deterministic (`1/3 -> 33.33`,
-  `2/3 -> 66.67`) regardless of binary float representation. `total == 0`
-  is special-cased to return `0.0` rather than raising or dividing by zero.
-- `TaskRepository.search` runs exactly the two-statement shape design
-  ADR-10 specifies: one `count(*) ... FILTER (WHERE ...)` aggregate query
-  over the whole list for `total_all`/`done_all` (always filter-independent,
-  backing `completion_percentage`) and `total_filtered` (respects
-  `TaskFilter`), plus one separate paged `SELECT` for `items`. This was a
-  genuine two-query design, not a simplification: a single query computing
-  both the unfiltered completion counts and the filtered, paginated items
-  would need either a window function (losing the exact `total_filtered`
-  once `offset` passes the end, the same reason design ADR-10 rejected
-  `count(*) OVER ()`) or duplicating the full-list scan inline — two
-  focused queries stay simpler and each is independently indexable on
-  `(list_id, created_at)`.
-- `completion_percentage` is computed in the domain (`value_objects.py`)
-  from the repository's raw `done_all`/`total_all` integers, never in SQL,
-  so the rounding rule stays unit-testable without a database and the SQL
-  layer only ever returns integers.
+- `completion_percentage` uses `Decimal` arithmetic with `ROUND_HALF_UP`
+  quantization to `0.01`, never Python floating-point division directly
+  (`1/3 -> 33.33`, `2/3 -> 66.67`); `total == 0` is special-cased to `0.0`.
 - `InMemoryTaskRepository.search` (the fake) mirrors the SQL semantics
-  exactly: counts are computed over every task in the list regardless of
-  `TaskFilter`, while `items` (sorted by `(created_at, id)`, matching the
-  real `ORDER BY`) and `total_filtered` both respect it. This was verified
-  to produce identical results to the real repository via
-  `tests/integration/test_task_repository.py::test_search_counts_and_filters`,
-  which exercises the same filter/pagination/count combinations against
-  real Postgres.
-- `ListTasks` (and its `GET /api/v1/lists/{list_id}/tasks` route) is a
-  read-only use case that still opens the full `async with self._uow:`
-  transaction, matching `GetTask`'s existing pattern (ADR-07), rather than
-  adding a separate read-only session path — there is no commit to make,
-  but `AccessPolicy.owned_list`'s 404 check must still run inside one
-  consistent session.
-- Query validation (`limit` 1-100 default 20, `offset` >= 0, invalid
+  exactly, verified to produce identical results to the real repository
+  against the same filter/pagination/count combinations over real
+  Postgres.
+- Query validation (`limit` 1-100 default 20, `offset` ≥ 0, invalid
   `status`/`priority` enum value) is enforced entirely by FastAPI/Pydantic
-  `Query(ge=..., le=...)` constraints and the existing `TaskStatus`/
-  `Priority` `StrEnum`s at the router boundary — no additional domain
-  validation was needed, since an out-of-range or invalid-enum query
-  parameter never reaches `ListTasksCommand` in the first place, the same
-  pattern already established for `priority` on task creation (Phase 6).
+  `Query(...)` constraints and the existing `StrEnum`s — no additional
+  domain validation layer was needed.
 
-## Assignment and Invitation Slice (Phase 8 / Slice 5) Notes
+### Phase 8: Assignment and Invitation (Slice 5, `feature/notifications`, PR 9)
 
 - `AccessPolicy.status_changeable_task` always raises the single
-  `TaskNotFoundError` (never `TaskListNotFoundError` first, unlike
-  `owned_task`'s two-stage check): a missing list, a missing task, and a
-  stranger must be indistinguishable per the task-assignment spec's
-  no-enumeration requirement, so both the list and the task are fetched
-  up front and a single boolean decides authorization. `ChangeTaskStatus`
-  now calls this policy instead of `owned_task`, so the owner OR the
-  task's assignee may change status; every other task use case
-  (`GetTask`, `UpdateTask`, `DeleteTask`, `AssignTask`) stays owner-only
-  via `owned_task`, so a non-owner assigning or editing the task itself
-  still gets the two-stage `TaskListNotFoundError`/`TaskNotFoundError`
-  (both 404 over HTTP — the existing Phase 5/6 non-owner test pattern).
-- `AssignTask` implements design ADR-12's exact five-step sequence inside
-  one `async with self._uow:` block: `owned_task` -> load the assignee by
-  id (missing -> `AssigneeNotFoundError`, 422) -> `task.assign(...)` ->
-  `commit()` -> only then, when the new assignee is non-null and differs
-  from the previous one, build and send one `TaskInvitation`. The owner's
-  and new assignee's emails are read from the same open session before
-  committing (needed for the invitation's content), never after, so no
-  extra round trip or detached-entity risk.
-- `AssignTask`'s result is the `Task` entity directly (same shape as
-  `ChangeTaskStatus`), not a dedicated `AssignTaskResult` — the design
-  doc's ADR-04 lists `AssignTaskResult` as an example of a composite
-  result, but nothing about assignment actually needs extra fields beyond
-  the updated task; returning `Task` directly avoids an empty wrapper
-  dataclass. This is a deviation from that one sentence in the design,
-  not from any ADR-12 behavior.
-- `BackgroundTaskNotifier.send_task_invitation` is `async def` (satisfying
+  `TaskNotFoundError` (never a two-stage list-then-task check, unlike
+  `owned_task`): a missing list, a missing task, and a stranger must be
+  indistinguishable per the no-enumeration requirement, so both are
+  fetched up front and one boolean decides authorization.
+- `BackgroundTaskNotifier.send_task_invitation` is `async def` (to satisfy
   the `NotificationService` Protocol) but does no `await`-worthy work: it
-  calls the synchronous `BackgroundTasks.add_task(...)` to schedule the
-  real delivery, then returns immediately, so `AssignTask`'s `await
-  self._notifier.send_task_invitation(...)` never blocks on the actual
-  notification — FastAPI runs the scheduled task only after the response
-  is sent (task-assignment spec: "without waiting for the notification to
-  finish").
-- **Discovered and fixed two real logging gaps, both found by the Docker
-  smoke test, not by the unit/integration suite alone:**
-  1. `alembic/env.py` called `fileConfig(config.config_file_name)` with
-     its default `disable_existing_loggers=True`. In the test suite,
-     Alembic's `env.py` runs in the *same process* as the API code (the
-     integration harness drives migrations in-process), so the first
-     integration test to run migrations permanently disabled every
-     pre-existing `app.*` logger (including `app.notifications`) for the
-     rest of the session — any instance already created at that point
-     gets `logger.disabled = True`, which `caplog.at_level(...)` does not
-     undo. This surfaced as a flaky `test_console_notifier_logs_...`
-     failure that passed in isolation but failed when the full suite ran
-     (order-dependent on which test first created the `app.notifications`
-     `Logger` object relative to the first integration test). Fixed by
-     passing `disable_existing_loggers=False` — safe because the real
-     `alembic upgrade head` CLI runs in its own separate OS process via
-     `docker/entrypoint.sh` anyway, so this flag never mattered there.
-  2. Independently, the real running server (verified via
-     `docker compose logs api`) never printed the invitation line at all:
-     nothing in the app ever configures logging, so Python's root logger
-     defaults to `WARNING` with no handler, silently dropping every
-     `INFO`-level `app.notifications`/`app.infrastructure.api.errors`
-     call outside of tests (where `caplog` or `pytest`'s own handler
-     masked the gap). Fixed with one `logging.basicConfig(level=logging.INFO)`
-     call at the top of `main.py`, which runs at import time, before
-     uvicorn's own `dictConfig` (which only configures `uvicorn.*` loggers
-     and explicitly sets `disable_existing_loggers=False`, so it does not
-     re-trigger gap #1). Verified end-to-end: `docker compose logs api`
-     now shows `INFO:app.notifications:Task invitation: ... invited ...
-     to '...' (list '...')` after a real assignment over HTTP.
-- `GET /users/me/tasks`'s response schema (`AssignedTaskPageResponse`) has
-  no `completion_percentage` field, matching design ADR-10's wording
-  exactly (`{items, total}`) — completion is a per-list metric and is not
-  meaningful across lists the caller does not own.
+  schedules the real delivery via `background_tasks.add_task(...)` and
+  returns immediately, so `AssignTask` never blocks on the actual
+  notification.
+- **Discovered and fixed two real logging gaps**, both found by the Docker
+  smoke test, not by the unit/integration suite:
+  1. `alembic/env.py`'s `fileConfig(...)` defaulted to
+     `disable_existing_loggers=True`; since the integration harness runs
+     Alembic in-process, the first test to run migrations permanently
+     disabled every pre-existing `app.*` logger (including
+     `app.notifications`) for the rest of the session. Fixed with
+     `disable_existing_loggers=False` — safe because the real CLI runs
+     `alembic upgrade head` in its own separate OS process anyway.
+  2. The real running server never printed the invitation line at all:
+     nothing in the app configured logging, so Python's root logger
+     defaulted to `WARNING` with no handler. Fixed with one
+     `logging.basicConfig(level=logging.INFO)` call at the top of
+     `main.py`. Verified end-to-end via `docker compose logs api`.
+- `GET /users/me/tasks`'s response has no `completion_percentage` field —
+  completion is a per-list metric, not meaningful across lists the caller
+  does not own.
 
-## Phase 9: Code Hardening (slice 6a, `feature/security-hardening`)
+### Phase 9: Code Hardening (Slice 6a, `feature/security-hardening`, PR 10)
 
-- **`X-Frame-Options: DENY` chosen over a `Content-Security-Policy` frame
-  directive.** The security-hardening spec accepts either. A strict CSP
-  would need an allow-list for Swagger UI's inline scripts/styles at
-  `/docs` (or a separate exemption path), which is unnecessary complexity
-  for a header whose only job here is clickjacking protection.
-  `X-Frame-Options: DENY` satisfies the requirement with zero risk of
-  breaking `/docs`.
-- **`Strict-Transport-Security` is conditional on the request being HTTPS**,
-  checked via `request.url.scheme == "https"` or a trusted
-  `X-Forwarded-Proto: https` header (the common shape behind a reverse
-  proxy/load balancer that terminates TLS). Sending HSTS over plain HTTP
-  would be misleading (and, per the HSTS spec itself, browsers ignore it
-  over HTTP anyway).
-- **Rate limiting is off by default** (`Settings.rate_limit_enabled =
-  False`) rather than on with a high limit for tests. This was simpler and
-  more robust than trying to pick a limit high enough that no existing
-  suite (which calls `/auth/login`/`/auth/register` many times per test
-  file) would ever cross it by coincidence. The dedicated
-  `tests/unit/test_rate_limit.py` is the only place that flips
-  `limiter.enabled = True` (via `monkeypatch.setattr`, which auto-reverts)
-  with a deliberately low limit (`3/minute`), and calls `limiter.reset()`
-  before and after so no counter state leaks into/out of other test
-  modules. The running compose stack sets `RATE_LIMIT_ENABLED=true` so the
-  behavior is observable end-to-end.
-- **`slowapi`'s `Limiter` is a module-level singleton**
-  (`infrastructure/security/rate_limit.py`), not constructed inside
-  `create_app()`. `slowapi`'s `@limiter.limit(...)` decorator binds to the
-  specific `Limiter` instance it decorates at import time (its internal
-  check is `if self.enabled: ...`, not a lookup through
-  `request.app.state.limiter`), so a limiter built fresh inside
-  `create_app()` would never be the one the decorated route functions
-  actually consult. `app.state.limiter = limiter` is still set for
-  `slowapi`'s own conventions, but the enablement and reset calls that
-  matter go through the imported singleton directly.
-- **No `SlowAPIMiddleware`.** `slowapi` ships an optional ASGI middleware
-  that applies default limits automatically to every route and injects
-  `X-RateLimit-*` headers. It was deliberately left out: its synchronous
-  fallback path (`sync_check_limits`) silently substitutes `slowapi`'s own
-  default exception handler for any *async* custom handler, which would
-  have silently discarded our `{"code": "rate_limited", ...}` error
-  contract. The per-route `@limiter.limit(...)` decorator alone is
-  sufficient here since every rate-limited route is decorated explicitly;
-  `app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)`
-  is the single source of truth for the 429 response body.
-- **The auth rate limit is a callable, not a fixed string**
-  (`@limiter.limit(auth_rate_limit)` where `auth_rate_limit()` reads
-  `get_settings().auth_rate_limit` on every check), per `slowapi`'s
-  documented support for `StrOrCallableStr`. This keeps the limit
-  configurable via `Settings`/env without needing to reconstruct the
-  `Limiter` or re-import the module — the exact property the dedicated
-  test relies on to install a lower limit than production's default.
-- **`CORSMiddleware`'s `allow_credentials=True` with an empty
-  `allow_origins` default** is intentional, not an oversight: Starlette's
-  `CORSMiddleware` never adds `Access-Control-Allow-Origin` for a
-  non-matching (or, with an empty list, *any*) origin, so an empty
-  allow-list is the strictest possible default — no origin gets
-  credentialed access until one is explicitly configured via
-  `CORS_ALLOWED_ORIGINS`.
-- **`.env.example` was not updated** with the three new variables
-  (`CORS_ALLOWED_ORIGINS`, `RATE_LIMIT_ENABLED`, `AUTH_RATE_LIMIT`): the
-  apply session's sandbox denies all read/write access to that specific
-  file path. The three variables are documented in the README's Security
-  section instead, and `docker-compose.yml`'s `api.environment` sets them
-  directly for the running stack. This is recorded here as a pending
-  cleanup, not a silent omission — whoever next has unrestricted
-  filesystem access should add the three lines to `.env.example` for
-  local-development parity with compose.
+- `X-Frame-Options: DENY` was chosen over a `Content-Security-Policy` frame
+  directive, which would need a Swagger-UI allow-list exemption for no
+  extra protection against clickjacking.
+- `Strict-Transport-Security` is conditional on the request being HTTPS
+  (directly, or via a trusted `X-Forwarded-Proto: https` header) — sending
+  HSTS over plain HTTP would be misleading, and browsers ignore it anyway.
+- Rate limiting is **off by default** (`rate_limit_enabled: bool = False`)
+  rather than on with a high limit, so no existing test suite needs
+  throttle-awareness; only `test_rate_limit.py` flips it on with a
+  deliberately low limit, resetting the limiter state before/after.
+- `slowapi`'s `Limiter` is a module-level singleton, not constructed inside
+  `create_app()`: its `@limiter.limit(...)` decorator binds to the specific
+  instance it decorates at import time, so a limiter built fresh inside the
+  app factory would never be the one the decorated routes actually
+  consult.
+- **No `SlowAPIMiddleware`** registered: reading its source showed its
+  synchronous fallback path silently substitutes `slowapi`'s own default
+  exception handler for any *async* custom handler (ours is), which would
+  have discarded the `{"code": "rate_limited", ...}` contract. The
+  per-route `@limiter.limit(...)` decorator alone is sufficient since every
+  rate-limited route is already decorated explicitly.
+- `CORSMiddleware`'s `allow_credentials=True` with an empty
+  `allow_origins` default is intentional: Starlette never adds
+  `Access-Control-Allow-Origin` for a non-matching (or, with an empty list,
+  any) origin, so an empty allow-list is the strictest possible default.
 
-## Phase 10: CI Security Scanning (slice 6b, `feature/security-ci-scanners`)
+### Phase 10: CI Security Scanning (Slice 6b, `feature/security-ci-scanners`, PR 11)
 
-- **Verification method: static workflow validation, not a live GitHub
-  Actions run.** Task 10.5 originally called for pushing the branch and
-  observing `security.yml` run to completion. Per explicit orchestrator
-  instruction for this apply session, pushing/opening PRs is reserved for
-  the orchestrator, so this phase verifies statically instead:
-  `uvx --from actionlint-py actionlint .github/workflows/security.yml
-  .github/workflows/codeql.yml .github/workflows/ci.yml` (exit 0, no
-  findings on any of the three), plus a plain `yaml.safe_load` parse of
-  `.github/dependabot.yml` and both new workflow files. `uvx bandit -r src
-  -ll` and the `uv export --frozen --no-hashes | uvx pip-audit -r -` command
-  were also run directly against this repository (not just syntax-checked):
-  bandit found 0 medium/high findings (8 low-severity, filtered out by
-  `-ll`); pip-audit found no known vulnerabilities in the locked dependency
-  set. Task 10.5 is marked "pending orchestrator observation" in
-  `tasks.md`, not `[x]` — the actual GitHub Actions run against a pushed
-  branch has not happened yet.
-- **Bandit is blocking; pip-audit is non-blocking.** Bandit's `-ll` filter
-  already restricts findings to medium+ severity in our own first-party
-  code, which is cheap to react to immediately. A pip-audit finding is a
-  transitive dependency CVE that may need time to triage or wait on an
-  upstream patch; blocking every PR the instant a new CVE is published
-  would create merge gridlock unrelated to the change under review. Both
-  decisions satisfy the spec's SHOULD-level "surfaced... without blocking
-  merges solely on scanner findings unless explicitly configured" — bandit
-  is the explicit exception, documented here.
-- **Trivy scans the image built from the repository's own `Dockerfile`**
-  (`docker build -t crehana-todo-api:security-scan .`) rather than a
-  registry image, so the scan reflects exactly what would ship.
-  `ignore-unfixed: true` means only vulnerabilities with an available
-  upstream fix can fail the job — an unfixable HIGH/CRITICAL in a base
-  image would otherwise block every PR with no possible remediation.
-- **Snyk is gated entirely on the `SNYK_TOKEN` secret being present**, with
-  every step individually conditioned on `env.SNYK_TOKEN != ''` rather than
-  a single job-level `if`, so the job still appears in the Actions UI (as
-  skipped-to-no-op) instead of disappearing silently, which would be
-  confusing when deciding whether to add the token later. It is
-  `continue-on-error: true` regardless, per the proposal's "non-blocking"
-  guidance for this specific scanner.
-- **Fluid Attacks is pending, not implemented, and not faked.** The
-  orchestrator's explicit instruction was to research the *current*
-  free/open-source scanner invocation from Fluid Attacks' own primary
-  sources (`docs.fluidattacks.com`, `github.com/fluidattacks`) before
-  wiring it, and to never pipe a remote `curl | sh` script into a security
-  pipeline even if that is what their docs show. This apply session has no
-  web-research tool available (no `WebFetch`/`WebSearch`-equivalent in the
-  executor's tool set), so the current invocation could not be verified
-  against a primary source. Rather than guess or copy a possibly-stale
-  pattern, `security.yml` ships a commented-out job stub showing exactly
-  where an official pinned Docker image or GitHub Action would plug in,
-  and this entry records the gap explicitly. **Follow-up required**:
-  whoever next has web access should confirm the current free-tier
-  invocation from the primary sources above and either (a) uncomment and
-  complete the stub, or (b) explicitly decide Fluid Attacks is out of
-  scope and remove the stub with that rationale recorded here.
-- **Dependabot uses the native `uv` ecosystem.** Dependabot version updates
-  support `uv` (GA since 2025-03-13) and security updates for `uv.lock` are
-  also supported, so updates resolve through `uv.lock` instead of only
-  reading `pyproject.toml` constraints. Sources:
-  https://github.blog/changelog/2025-03-13-dependabot-version-updates-now-support-uv-in-general-availability/
-  and https://docs.astral.sh/uv/guides/integration/dependabot/
+- Bandit is **blocking** (medium+ severity on first-party code, cheap to
+  react to immediately); pip-audit is **non-blocking** (a transitive
+  dependency CVE may need time to triage or wait on an upstream patch).
+  Both satisfy the spec's "surfaced without blocking merges unless
+  explicitly configured" — bandit is the documented exception.
+- Trivy scans the image built from the repository's own `Dockerfile`
+  (not a registry image), so the scan reflects exactly what would ship.
+  `ignore-unfixed: true` means only a vulnerability with an available
+  upstream fix can fail the job.
+- Snyk is gated entirely on the `SNYK_TOKEN` secret, with every step
+  individually conditioned (not a single job-level `if`), so the job still
+  appears in the Actions UI as skipped-to-no-op instead of disappearing
+  silently. It is `continue-on-error: true` regardless.
+- **Fluid Attacks is pending, not implemented, and not faked** — see
+  Section D for the full reasoning and the explicit follow-up instruction.
+- Dependabot uses the `pip` ecosystem (not a dedicated `uv` ecosystem
+  value) because whether GitHub's native `uv.lock` Dependabot support
+  applies to this repository's exact configuration could not be verified
+  in this session (same web-access gap as Fluid Attacks) — recorded as a
+  pending confirmation in Section D.
+- Verification for this slice was static (actionlint + YAML parse + local
+  `bandit`/`pip-audit` runs), not a live GitHub Actions run — pushing
+  branches and observing CI runs was reserved for the orchestrator in this
+  delivery, not the apply sessions.
 
-## Phase 11: Sentry Integration (slice 6c, `feature/sentry-integration`)
+### Phase 11: Sentry Integration (Slice 6c, `feature/sentry-integration`, PR 12)
 
-- **Not cut.** The proposal names this slice the first candidate to cut
-  under time pressure; this session had the time/scope to complete it, so
-  it was implemented rather than skipped.
-- **`init_sentry()` lives in its own module**
-  (`infrastructure/observability/sentry.py`) rather than inline in
-  `main.py`, purely so the monkeypatch-spy test can target
-  `sentry_sdk.init` directly without needing to reach into `main`'s module
-  namespace or restructure `create_app()`/`lifespan`.
-- **Called at module import time in `main.py`, before `create_app()`**, not
-  inside the `lifespan` context manager. Sentry's own guidance is to
-  initialize "as early as possible"; doing it inside `lifespan` would only
-  run once ASGI startup actually begins, missing anything that could go
-  wrong during app construction itself (router registration, middleware
-  wiring). `logging.basicConfig(...)` (Phase 8's fix) still runs first, so
-  the ordering between the two is preserved.
-- **No test asserts against a real Sentry endpoint.** Both tests in
-  `tests/unit/test_sentry.py` monkeypatch `sentry_sdk.init` with a
-  call-recording lambda and inspect the captured kwargs — exactly the
-  "assert via a monkeypatched `sentry_sdk.init` call-spy, never a real
-  network call" requirement from the task. The FastAPI integration's
-  auto-enablement (triggered merely by `fastapi` being importable, which
-  it always is in this project) is not separately re-verified here: it is
-  `sentry-sdk`'s own tested behavior, not application code.
-- **`sentry_traces_sample_rate` defaults to `0.0`** (performance tracing
-  off) and **`environment` defaults to `"development"`** — both
-  configurable via `Settings`/env, matching the orchestrator-provided
-  library facts for this integration exactly (`traces_sample_rate=
-  settings.sentry_traces_sample_rate (default 0.0)`).
+- **Not cut**, despite the proposal naming this slice the first candidate
+  to cut under time pressure — there was enough time/scope to complete it.
+- `init_sentry()` lives in its own module
+  (`infrastructure/observability/sentry.py`) purely so a monkeypatch-spy
+  test can target `sentry_sdk.init` directly without reaching into
+  `main`'s module namespace.
+- Called at **module import time** in `main.py`, before `create_app()`,
+  not inside the `lifespan` context manager — Sentry's own guidance is to
+  initialize as early as possible, so it can also observe errors during
+  app construction itself (router registration, middleware wiring), not
+  just request handling.
+- No test asserts against a real Sentry endpoint: both tests monkeypatch
+  `sentry_sdk.init` with a call-recording lambda and inspect the captured
+  kwargs.
+
+## D. Pending / Deferred
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Refresh-token rotation and a revocation denylist | Deferred, documented as a known gap | Out of scope for this challenge; every token already carries a `jti` claim to key a future denylist on |
+| Shared lists / collaboration (multiple owners or members of a list) | Out of scope | Only the single-assignee middle ground (Section B, #3) is provided |
+| Real email delivery (SMTP or a provider) | Out of scope by design | Console/log notifier only — the challenge explicitly asks for a *fake* invitation |
+| Fluid Attacks CI integration | Pending | No primary-source-verified free/open-source invocation could be confirmed (no web-research tool available in the apply sessions that worked on `security.yml`). A commented-out job stub in `security.yml` marks where an official pinned Docker image or GitHub Action would plug in. **Follow-up**: whoever next has web access should confirm the current free-tier invocation from `docs.fluidattacks.com`/`github.com/fluidattacks` and either complete the stub or explicitly drop it with rationale recorded here |
+| Dependabot's `pip`-vs-`uv` ecosystem choice for `uv.lock` | Pending confirmation | Currently configured as `pip`; GitHub's native `uv` ecosystem support for Dependabot could not be verified against this repository's exact setup without web access — revisit once that can be confirmed |
+| Cosmetic doubled CHECK-constraint name on `task_lists` | Known, not fixed | The real database name is `ck_task_lists_ck_task_lists_name_not_blank` (verified by reading `versions/0002_task_lists.py`: an already-prefixed `name="ck_task_lists_name_not_blank"` gets the naming convention's `"ck"` template applied again). Harmless — the domain layer rejects a blank name before any `INSERT` — and left alone because the migration that introduced it belongs to an already-merged, out-of-scope PR (Phase 4). See Section C, Phase 6, for the full discovery and the fix applied going forward in `0003_tasks.py` |
+| Idempotent same-status transition | Considered and rejected, not pending | Noted here for completeness: an idempotent 200-with-no-change response for a same-status `PATCH .../status` was explicitly considered during Phase 5 and rejected in favor of treating it as any other invalid transition (409) — see Section B, #9 |
