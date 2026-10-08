@@ -1,0 +1,56 @@
+schema: spec-driven
+
+context: |
+  Project: crehana-todo-api — new repo, no code yet; stack is PLANNED, not installed.
+  Stack: Python 3.12, FastAPI, SQLAlchemy 2.0 async + asyncpg, Alembic, PostgreSQL 16.
+  Validation/config: Pydantic v2 + pydantic-settings. Package manager: uv (pyproject.toml PEP 621 + uv.lock).
+  Architecture: layered Domain / Application (use cases) / Infrastructure under src/app/.
+  Testing (planned): pytest + pytest-asyncio + pytest-cov + testcontainers[postgres]; coverage gate >=75%; config in pytest.ini.
+  Quality (planned): black, isort (profile=black), flake8 (.flake8), mypy --strict, pre-commit.
+  Delivery (planned): Docker multistage + docker-compose; GitHub Actions CI.
+  Branches: main (production), develop (integration).
+
+# Strict TDD is now enabled: Phase 0 (feature/bootstrap-project) bootstrapped
+# pyproject.toml, uv.lock, and pytest.ini, so `uv run pytest` is a real,
+# runnable workspace-level command. Every task from Phase 1 onward follows
+# strict RED -> GREEN -> REFACTOR against this runner.
+strict_tdd: true
+
+testing:
+  requested_strict_tdd: true
+  requested_test_runner: "uv run pytest"
+  coverage_threshold: 75
+  projects: ["src/app"]
+
+session:
+  pace: interactive
+  artifact_store: hybrid
+  delivery_strategy: single-pr
+  review_budget_lines: 400
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - A proposal that bootstraps the planned stack must say explicitly that it is a bootstrap, not an incremental change
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Document the layered Domain / Application (use cases) / Infrastructure boundaries under src/app/
+    - Document the async SQLAlchemy 2.0 engine/session lifecycle and the Alembic migration strategy
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+    - Forecast against the 400-changed-line review budget; delivery strategy is single-pr
+  apply:
+    guidelines:
+      - Follow uv + pyproject.toml (PEP 621) conventions once the stack is bootstrapped
+      - Keep black, isort (profile=black), flake8, and mypy --strict green before marking a task done
+    tdd: true
+    test_command: "uv run pytest"
+  verify:
+    test_command: "uv run pytest"
+    build_command: "docker build ."
+    coverage_threshold: 75
+  archive:
+    - Warn before merging destructive deltas
