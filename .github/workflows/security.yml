@@ -15,7 +15,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v7
       # Medium+ severity only (`-ll`): blocking, since these findings are in
       # our own first-party code and should be fixed before merge, not
       # surfaced-but-ignored.
@@ -28,7 +28,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v7
       - run: uv export --frozen --no-hashes > requirements.txt
       # Non-blocking: a transitive dependency vulnerability needs time to
       # triage/patch upstream and should not block every PR the moment a
@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         if: env.SNYK_TOKEN != ''
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v7
         if: env.SNYK_TOKEN != ''
       - run: uv export --frozen --no-hashes > requirements.txt
         if: env.SNYK_TOKEN != ''
