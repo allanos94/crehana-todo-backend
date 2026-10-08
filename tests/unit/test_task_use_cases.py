@@ -13,6 +13,7 @@ from app.application.tasks.dto import (
     CreateTaskCommand,
     DeleteTaskCommand,
     GetTaskCommand,
+    ListTasksCommand,
     UpdateTaskCommand,
 )
 from app.application.tasks.use_cases import (
@@ -20,6 +21,7 @@ from app.application.tasks.use_cases import (
     CreateTask,
     DeleteTask,
     GetTask,
+    ListTasks,
     UpdateTask,
 )
 from app.domain.exceptions import (
@@ -46,6 +48,27 @@ async def _make_list(uow: FakeUnitOfWork, owner_id: object) -> TaskList:
     )
     await uow.task_lists.add(task_list)
     return task_list
+
+
+async def _create_task(
+    uow: FakeUnitOfWork,
+    actor_id: object,
+    list_id: object,
+    *,
+    title: str = "Task",
+    priority: Priority = Priority.LOW,
+) -> object:
+    create = CreateTask(uow, FixedClock(_NOW, _TODAY))
+    return await create.execute(
+        CreateTaskCommand(
+            actor_id=actor_id,  # type: ignore[arg-type]
+            list_id=list_id,  # type: ignore[arg-type]
+            title=title,
+            description=None,
+            priority=priority,
+            due_date=None,
+        )
+    )
 
 
 async def test_create_task_succeeds_with_all_fields() -> None:
@@ -487,3 +510,205 @@ async def test_get_task_scoped_to_owner() -> None:
         GetTaskCommand(actor_id=actor_id, list_id=task_list.id, task_id=task.id)
     )
     assert result.id == task.id
+
+
+async def test_list_tasks_completion_ignores_active_filters() -> None:
+    """tasks spec: completion_percentage is computed over ALL tasks of the
+    list, regardless of the status/priority filters applied to `items`."""
+    uow = FakeUnitOfWork()
+    actor_id = uuid4()
+    task_list = await _make_list(uow, actor_id)
+    tasks = [await _create_task(uow, actor_id, task_list.id) for _ in range(4)]
+    done_task = await uow.tasks.get(tasks[0].id)
+    assert done_task is not None
+    done_task.status = TaskStatus.DONE
+    use_case = ListTasks(uow)
+
+    result = await use_case.execute(
+        ListTasksCommand(
+            actor_id=actor_id,
+            list_id=task_list.id,
+            status=TaskStatus.PENDING,
+            priority=None,
+            limit=20,
+            offset=0,
+        )
+    )
+
+    assert len(result.items) == 3
+    assert result.total == 3
+    assert result.completion_percentage == 25.00
+
+
+async def test_list_tasks_completion_is_zero_with_no_tasks() -> None:
+    uow = FakeUnitOfWork()
+    actor_id = uuid4()
+    task_list = await _make_list(uow, actor_id)
+    use_case = ListTasks(uow)
+
+    result = await use_case.execute(
+        ListTasksCommand(
+            actor_id=actor_id,
+            list_id=task_list.id,
+            status=None,
+            priority=None,
+            limit=20,
+            offset=0,
+        )
+    )
+
+    assert result.items == []
+    assert result.total == 0
+    assert result.completion_percentage == 0.0
+
+
+async def test_list_tasks_completion_rounds_to_two_decimals() -> None:
+    uow = FakeUnitOfWork()
+    actor_id = uuid4()
+    task_list = await _make_list(uow, actor_id)
+    tasks = [await _create_task(uow, actor_id, task_list.id) for _ in range(3)]
+    done_task = await uow.tasks.get(tasks[0].id)
+    assert done_task is not None
+    done_task.status = TaskStatus.DONE
+    use_case = ListTasks(uow)
+
+    result = await use_case.execute(
+        ListTasksCommand(
+            actor_id=actor_id,
+            list_id=task_list.id,
+            status=None,
+            priority=None,
+            limit=20,
+            offset=0,
+        )
+    )
+
+    assert result.completion_percentage == 33.33
+
+
+async def test_list_tasks_filters_by_status() -> None:
+    uow = FakeUnitOfWork()
+    actor_id = uuid4()
+    task_list = await _make_list(uow, actor_id)
+    pending_task = await _create_task(uow, actor_id, task_list.id, title="P")
+    other_task = await _create_task(uow, actor_id, task_list.id, title="D")
+    stored_other = await uow.tasks.get(other_task.id)
+    assert stored_other is not None
+    stored_other.status = TaskStatus.DONE
+    use_case = ListTasks(uow)
+
+    result = await use_case.execute(
+        ListTasksCommand(
+            actor_id=actor_id,
+            list_id=task_list.id,
+            status=TaskStatus.DONE,
+            priority=None,
+            limit=20,
+            offset=0,
+        )
+    )
+
+    assert [item.id for item in result.items] == [other_task.id]
+    assert pending_task.id not in [item.id for item in result.items]
+
+
+async def test_list_tasks_filters_by_priority() -> None:
+    uow = FakeUnitOfWork()
+    actor_id = uuid4()
+    task_list = await _make_list(uow, actor_id)
+    low = await _create_task(uow, actor_id, task_list.id, priority=Priority.LOW)
+    high = await _create_task(uow, actor_id, task_list.id, priority=Priority.HIGH)
+    use_case = ListTasks(uow)
+
+    result = await use_case.execute(
+        ListTasksCommand(
+            actor_id=actor_id,
+            list_id=task_list.id,
+            status=None,
+            priority=Priority.HIGH,
+            limit=20,
+            offset=0,
+        )
+    )
+
+    assert [item.id for item in result.items] == [high.id]
+    assert low.id not in [item.id for item in result.items]
+
+
+async def test_list_tasks_combines_status_and_priority_filters() -> None:
+    uow = FakeUnitOfWork()
+    actor_id = uuid4()
+    task_list = await _make_list(uow, actor_id)
+    match = await _create_task(uow, actor_id, task_list.id, priority=Priority.HIGH)
+    wrong_priority = await _create_task(
+        uow, actor_id, task_list.id, priority=Priority.LOW
+    )
+    wrong_status = await _create_task(
+        uow, actor_id, task_list.id, priority=Priority.HIGH
+    )
+    stored_wrong_status = await uow.tasks.get(wrong_status.id)
+    assert stored_wrong_status is not None
+    stored_wrong_status.status = TaskStatus.DONE
+    use_case = ListTasks(uow)
+
+    result = await use_case.execute(
+        ListTasksCommand(
+            actor_id=actor_id,
+            list_id=task_list.id,
+            status=TaskStatus.PENDING,
+            priority=Priority.HIGH,
+            limit=20,
+            offset=0,
+        )
+    )
+
+    ids = [item.id for item in result.items]
+    assert ids == [match.id]
+    assert wrong_priority.id not in ids
+    assert wrong_status.id not in ids
+
+
+async def test_list_tasks_pagination_total_reflects_filtered_count_not_page_size() -> (
+    None
+):
+    uow = FakeUnitOfWork()
+    actor_id = uuid4()
+    task_list = await _make_list(uow, actor_id)
+    for index in range(10):
+        await _create_task(uow, actor_id, task_list.id, title=f"Task {index}")
+    use_case = ListTasks(uow)
+
+    result = await use_case.execute(
+        ListTasksCommand(
+            actor_id=actor_id,
+            list_id=task_list.id,
+            status=None,
+            priority=None,
+            limit=3,
+            offset=3,
+        )
+    )
+
+    assert len(result.items) == 3
+    assert result.total == 10
+
+
+async def test_list_tasks_non_owner_raises_not_found() -> None:
+    uow = FakeUnitOfWork()
+    actor_id = uuid4()
+    stranger_id = uuid4()
+    task_list = await _make_list(uow, actor_id)
+    await _create_task(uow, actor_id, task_list.id)
+    use_case = ListTasks(uow)
+
+    with pytest.raises(TaskListNotFoundError):
+        await use_case.execute(
+            ListTasksCommand(
+                actor_id=stranger_id,
+                list_id=task_list.id,
+                status=None,
+                priority=None,
+                limit=20,
+                offset=0,
+            )
+        )

@@ -12,9 +12,11 @@ from uuid import UUID
 
 from app.application.exceptions import InvalidTokenError
 from app.application.ports import TokenPair, TokenType
+from app.domain.repositories import TaskCounts, TaskFilter
 from app.domain.task import Task
 from app.domain.task_list import TaskList
 from app.domain.user import User
+from app.domain.value_objects import TaskStatus
 
 
 class InMemoryUserRepository:
@@ -75,8 +77,8 @@ class InMemoryTaskListRepository:
 
 
 class InMemoryTaskRepository:
-    """A plain in-memory store for `Task` (basic CRUD only — filters/counts
-    and `list_by_assignee` land in later slices)."""
+    """A plain in-memory store for `Task` (CRUD plus filtered, paginated
+    `search`; `list_by_assignee` lands in slice 5)."""
 
     def __init__(self) -> None:
         self._by_id: dict[UUID, Task] = {}
@@ -92,6 +94,30 @@ class InMemoryTaskRepository:
 
     async def delete(self, task_id: UUID) -> None:
         self._by_id.pop(task_id, None)
+
+    async def search(
+        self, list_id: UUID, filters: TaskFilter, limit: int, offset: int
+    ) -> tuple[list[Task], TaskCounts]:
+        """Mirror the SQL semantics of design ADR-10: counts are computed
+        over every task in the list regardless of `filters`, while `items`
+        (ordered by `created_at`, `id`, then paginated) and the filtered
+        total both respect `filters`."""
+        all_in_list = [task for task in self._by_id.values() if task.list_id == list_id]
+        total_all = len(all_in_list)
+        done_all = sum(1 for task in all_in_list if task.status == TaskStatus.DONE)
+        matching = [
+            task
+            for task in all_in_list
+            if (filters.status is None or task.status == filters.status)
+            and (filters.priority is None or task.priority == filters.priority)
+        ]
+        matching.sort(key=lambda task: (task.created_at, task.id))
+        total_filtered = len(matching)
+        page = matching[offset : offset + limit]
+        counts = TaskCounts(
+            total_all=total_all, done_all=done_all, total_filtered=total_filtered
+        )
+        return page, counts
 
 
 class FakeUnitOfWork:

@@ -284,3 +284,48 @@ they land in code, not as a batch at the end.
   the same honest "combined cycle" deviation documented for every prior
   slice's integration flow test: it passed on first run against real
   Postgres; no prior failing run was discarded.
+
+## Filters, Pagination, Completion Slice (Phase 7 / Slice 4) Notes
+
+- `completion_percentage` is computed with `Decimal` arithmetic and
+  `ROUND_HALF_UP` quantization to `0.01`, never Python floating-point
+  division directly, so rounding is deterministic (`1/3 -> 33.33`,
+  `2/3 -> 66.67`) regardless of binary float representation. `total == 0`
+  is special-cased to return `0.0` rather than raising or dividing by zero.
+- `TaskRepository.search` runs exactly the two-statement shape design
+  ADR-10 specifies: one `count(*) ... FILTER (WHERE ...)` aggregate query
+  over the whole list for `total_all`/`done_all` (always filter-independent,
+  backing `completion_percentage`) and `total_filtered` (respects
+  `TaskFilter`), plus one separate paged `SELECT` for `items`. This was a
+  genuine two-query design, not a simplification: a single query computing
+  both the unfiltered completion counts and the filtered, paginated items
+  would need either a window function (losing the exact `total_filtered`
+  once `offset` passes the end, the same reason design ADR-10 rejected
+  `count(*) OVER ()`) or duplicating the full-list scan inline — two
+  focused queries stay simpler and each is independently indexable on
+  `(list_id, created_at)`.
+- `completion_percentage` is computed in the domain (`value_objects.py`)
+  from the repository's raw `done_all`/`total_all` integers, never in SQL,
+  so the rounding rule stays unit-testable without a database and the SQL
+  layer only ever returns integers.
+- `InMemoryTaskRepository.search` (the fake) mirrors the SQL semantics
+  exactly: counts are computed over every task in the list regardless of
+  `TaskFilter`, while `items` (sorted by `(created_at, id)`, matching the
+  real `ORDER BY`) and `total_filtered` both respect it. This was verified
+  to produce identical results to the real repository via
+  `tests/integration/test_task_repository.py::test_search_counts_and_filters`,
+  which exercises the same filter/pagination/count combinations against
+  real Postgres.
+- `ListTasks` (and its `GET /api/v1/lists/{list_id}/tasks` route) is a
+  read-only use case that still opens the full `async with self._uow:`
+  transaction, matching `GetTask`'s existing pattern (ADR-07), rather than
+  adding a separate read-only session path — there is no commit to make,
+  but `AccessPolicy.owned_list`'s 404 check must still run inside one
+  consistent session.
+- Query validation (`limit` 1-100 default 20, `offset` >= 0, invalid
+  `status`/`priority` enum value) is enforced entirely by FastAPI/Pydantic
+  `Query(ge=..., le=...)` constraints and the existing `TaskStatus`/
+  `Priority` `StrEnum`s at the router boundary — no additional domain
+  validation was needed, since an out-of-range or invalid-enum query
+  parameter never reaches `ListTasksCommand` in the first place, the same
+  pattern already established for `priority` on task creation (Phase 6).

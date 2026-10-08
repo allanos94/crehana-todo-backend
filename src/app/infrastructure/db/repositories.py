@@ -2,12 +2,14 @@
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.repositories import TaskCounts, TaskFilter
 from app.domain.task import Task
 from app.domain.task_list import TaskList
 from app.domain.user import User
+from app.domain.value_objects import TaskStatus
 from app.infrastructure.db.mappers import (
     model_to_task,
     model_to_task_list,
@@ -118,3 +120,44 @@ class SqlAlchemyTaskRepository:
         model = await self._session.get(TaskModel, task_id)
         if model is not None:
             await self._session.delete(model)
+
+    async def search(
+        self, list_id: UUID, filters: TaskFilter, limit: int, offset: int
+    ) -> tuple[list[Task], TaskCounts]:
+        """One `FILTER`-aggregate query for the list-wide counts plus one
+        paged query for `items` (design ADR-10): `total_all`/`done_all`
+        back `completion_percentage` and never apply `filters`;
+        `total_filtered` and the page both do."""
+        filter_conditions = []
+        if filters.status is not None:
+            filter_conditions.append(TaskModel.status == filters.status)
+        if filters.priority is not None:
+            filter_conditions.append(TaskModel.priority == filters.priority)
+        filtered_predicate = and_(*filter_conditions) if filter_conditions else true()
+
+        counts_statement = (
+            select(
+                func.count().label("total_all"),
+                func.count()
+                .filter(TaskModel.status == TaskStatus.DONE)
+                .label("done_all"),
+                func.count().filter(filtered_predicate).label("total_filtered"),
+            )
+        ).where(TaskModel.list_id == list_id)
+        counts_row = (await self._session.execute(counts_statement)).one()
+        counts = TaskCounts(
+            total_all=counts_row.total_all,
+            done_all=counts_row.done_all,
+            total_filtered=counts_row.total_filtered,
+        )
+
+        page_statement = (
+            select(TaskModel)
+            .where(TaskModel.list_id == list_id, *filter_conditions)
+            .order_by(TaskModel.created_at, TaskModel.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        page_result = await self._session.execute(page_statement)
+        items = [model_to_task(model) for model in page_result.scalars()]
+        return items, counts

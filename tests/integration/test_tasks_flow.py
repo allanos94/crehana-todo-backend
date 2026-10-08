@@ -99,3 +99,63 @@ async def test_create_update_status_transitions_and_delete_end_to_end(
         f"/api/v1/lists/{list_id}/tasks/{task_id}", headers=headers
     )
     assert final_get_response.status_code == 404
+
+
+async def test_filtered_listing_and_completion(client: AsyncClient) -> None:
+    """Real-DB end to end (tasks spec: filtered/paginated listing with
+    completion; design ADR-10): 10 tasks with mixed statuses/priorities,
+    then assertions over pagination and the list-wide completion
+    percentage, which must ignore the active filter."""
+    headers = await _register_and_login(client, "flow-filters@example.com")
+    list_response = await client.post(
+        "/api/v1/lists", json={"name": "Groceries"}, headers=headers
+    )
+    list_id = list_response.json()["id"]
+
+    task_ids: list[str] = []
+    for index in range(10):
+        priority = "high" if index % 2 == 0 else "low"
+        created = await client.post(
+            f"/api/v1/lists/{list_id}/tasks",
+            json={"title": f"Task {index}", "priority": priority},
+            headers=headers,
+        )
+        task_ids.append(created.json()["id"])
+
+    # Move 3 tasks to done through the valid transition sequence
+    # (pending -> in_progress -> done) so completion reflects 3/10 tasks.
+    for task_id in task_ids[:3]:
+        await client.patch(
+            f"/api/v1/lists/{list_id}/tasks/{task_id}/status",
+            json={"status": "in_progress"},
+            headers=headers,
+        )
+        await client.patch(
+            f"/api/v1/lists/{list_id}/tasks/{task_id}/status",
+            json={"status": "done"},
+            headers=headers,
+        )
+
+    filtered_response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?status=pending", headers=headers
+    )
+    assert filtered_response.status_code == 200
+    filtered_body = filtered_response.json()
+    assert filtered_body["total"] == 7
+    assert len(filtered_body["items"]) == 7
+    assert filtered_body["completion_percentage"] == 30.00
+
+    priority_response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?priority=high", headers=headers
+    )
+    assert priority_response.status_code == 200
+    assert priority_response.json()["total"] == 5
+
+    page_response = await client.get(
+        f"/api/v1/lists/{list_id}/tasks?limit=4&offset=8", headers=headers
+    )
+    assert page_response.status_code == 200
+    page_body = page_response.json()
+    assert len(page_body["items"]) == 2  # only 2 remain after offset 8
+    assert page_body["total"] == 10
+    assert page_body["completion_percentage"] == 30.00

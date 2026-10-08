@@ -13,10 +13,11 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.domain.repositories import TaskFilter
 from app.domain.task import Task
 from app.domain.task_list import TaskList
 from app.domain.user import User
-from app.domain.value_objects import Priority
+from app.domain.value_objects import Priority, TaskStatus
 from app.infrastructure.db.models import TaskListModel, TaskModel, UserModel
 from app.infrastructure.db.repositories import (
     SqlAlchemyTaskListRepository,
@@ -214,3 +215,53 @@ async def test_unmapped_constraint_violation_is_re_raised_unmodified(
         await uow.tasks.add(task)
         with pytest.raises(IntegrityError):
             await uow.commit()
+
+
+async def test_search_counts_and_filters(db_session: AsyncSession) -> None:
+    """Proves `SqlAlchemyTaskRepository.search`'s one `FILTER`-aggregate
+    counts query plus one paged query match the fake's semantics (design
+    ADR-10): the completion-backing counts (`total_all`/`done_all`) ignore
+    `TaskFilter`, while `items`/`total_filtered` and pagination respect
+    it."""
+    _, task_list = await _create_owner_and_list(db_session)
+    repo = SqlAlchemyTaskRepository(db_session)
+    created = []
+    for index in range(4):
+        task = Task.create(
+            list_id=task_list.id,
+            title=f"Task {index}",
+            description=None,
+            priority=Priority.HIGH if index == 0 else Priority.LOW,
+            due_date=None,
+            today=_NOW.date(),
+            now=_NOW,
+        )
+        await repo.add(task)
+        created.append(task)
+    await db_session.commit()
+    done_task = await repo.get(created[0].id)
+    assert done_task is not None
+    done_task.status = TaskStatus.DONE
+    await repo.update(done_task)
+    await db_session.commit()
+
+    pending_items, counts = await repo.search(
+        task_list.id, TaskFilter(status=TaskStatus.PENDING), limit=20, offset=0
+    )
+
+    assert counts.total_all == 4
+    assert counts.done_all == 1
+    assert counts.total_filtered == 3
+    assert len(pending_items) == 3
+    assert all(item.status == TaskStatus.PENDING for item in pending_items)
+
+    high_priority_items, _ = await repo.search(
+        task_list.id, TaskFilter(priority=Priority.HIGH), limit=20, offset=0
+    )
+    assert [item.id for item in high_priority_items] == [created[0].id]
+
+    page_items, page_counts = await repo.search(
+        task_list.id, TaskFilter(), limit=2, offset=2
+    )
+    assert len(page_items) == 2
+    assert page_counts.total_filtered == 4
