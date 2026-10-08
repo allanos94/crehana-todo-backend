@@ -146,3 +146,50 @@ they land in code, not as a batch at the end.
 - No DB/API surface exists yet for task lists (fakes-only, per the 2a/2b
   split) — `tests/integration/*` and the HTTP router land in Phase 4
   (slice 2b).
+
+## Task Lists API Slice (Phase 4 / Slice 2b) Notes
+
+- Context7 MCP tools were not present in this session's tool list (as in
+  every prior slice), so the functional unique index was **not**
+  autogenerate-verified against SQLAlchemy/Alembic docs. Per explicit
+  orchestrator instruction, `versions/0002_task_lists.py` was written by
+  hand — `op.create_index("uq_task_lists_owner_id_lower_name",
+  "task_lists", ["owner_id", sa.text("lower(name)")], unique=True)` —
+  rather than relying on Alembic autogenerate to detect it, and the model
+  mirrors it with a standalone `Index("uq_task_lists_owner_id_lower_name",
+  TaskListModel.owner_id, func.lower(TaskListModel.name), unique=True)`
+  declared after the class body (a functional index cannot be expressed
+  inside `__table_args__`, which has no name to reference the not-yet-built
+  class). **Verified empirically** against real Postgres 16 (installed
+  SQLAlchemy 2.1.4 / Alembic 1.20.0):
+  `tests/integration/test_task_list_repository.py::test_functional_unique_index_raises_on_case_insensitive_collision`
+  inserts `"Groceries"` then `"GROCERIES"` for the same owner through two
+  separate `SqlAlchemyUnitOfWork` transactions and confirms the second
+  `commit()` raises `IntegrityError` translated to
+  `DuplicateTaskListNameError` — the same
+  `exc.orig.__cause__.constraint_name` pattern already proven for
+  `uq_users_email` in slice 1a. The migration round-trip test
+  (`test_migrations.py::test_downgrade_base_then_upgrade_head`) also
+  re-ran clean through `0001` + `0002`, confirming `0002`'s `downgrade()`
+  drops both indexes before the table.
+- Per-owner case-insensitive uniqueness is checked twice, by design: the
+  application layer (`_ensure_name_available`, slice 2a) gives a friendly
+  409 on the common case, and the DB's functional unique index is the
+  race-safety backstop under concurrency — both paths raise the same
+  `DuplicateTaskListNameError`.
+- `TaskListRepository.update` loads the row via `session.get(...)` (SQLAlchemy's
+  identity map) and assigns the three mutable fields, the same pattern
+  ADR-07 describes; it does not use a bulk `UPDATE` statement.
+- `UpdateTaskListCommand.name` is typed `str | None | Unset` (not
+  `str | Unset`): the PATCH schema allows `name` to be absent (`UNSET`,
+  untouched) or a string, but an explicit JSON `null` is a distinct,
+  invalid state (`name` is a required field and cannot be cleared) that
+  `UpdateTaskList` now rejects with `InvalidFieldError` (422) instead of
+  crashing on `None.strip()`.
+- `tests/integration/test_task_lists_flow.py`'s end-to-end flow test was
+  not written against a confirmed-failing implementation (no RED
+  observed) — the same honest "combined cycle" deviation documented for
+  every prior slice's integration flow test: the use cases and HTTP layer
+  were already complete and unit-tested by the time it was written, so
+  there was no missing-code shape to fail against. It passed on first run
+  against real Postgres; no prior failing run was discarded.
