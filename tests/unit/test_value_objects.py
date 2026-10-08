@@ -1,9 +1,19 @@
 """Tests for pure domain value-object rules (design ADR-02)."""
 
+from datetime import date
+
 import pytest
 
-from app.domain.exceptions import InvalidFieldError, PasswordPolicyError
+from app.domain.exceptions import (
+    DueDateInPastError,
+    InvalidFieldError,
+    PasswordPolicyError,
+)
 from app.domain.value_objects import (
+    Priority,
+    TaskStatus,
+    can_transition,
+    ensure_due_date_not_past,
     normalize_optional_text,
     normalize_required_text,
     validate_password_policy,
@@ -62,3 +72,47 @@ def test_validate_password_policy(password: str, should_raise: bool) -> None:
             validate_password_policy(password)
     else:
         validate_password_policy(password)  # must not raise
+
+
+@pytest.mark.parametrize(
+    ("source", "destination", "expected"),
+    [
+        (TaskStatus.PENDING, TaskStatus.IN_PROGRESS, True),
+        (TaskStatus.IN_PROGRESS, TaskStatus.PENDING, True),
+        (TaskStatus.IN_PROGRESS, TaskStatus.DONE, True),
+        (TaskStatus.DONE, TaskStatus.IN_PROGRESS, True),
+        (TaskStatus.PENDING, TaskStatus.DONE, False),
+        (TaskStatus.DONE, TaskStatus.PENDING, False),
+        (TaskStatus.PENDING, TaskStatus.PENDING, False),
+        (TaskStatus.IN_PROGRESS, TaskStatus.IN_PROGRESS, False),
+        (TaskStatus.DONE, TaskStatus.DONE, False),
+    ],
+)
+def test_can_transition(
+    source: TaskStatus, destination: TaskStatus, expected: bool
+) -> None:
+    assert can_transition(source, destination) is expected
+
+
+def test_priority_values() -> None:
+    assert {priority.value for priority in Priority} == {"low", "medium", "high"}
+
+
+def test_ensure_due_date_not_past_rejects_past_date() -> None:
+    today = date(2026, 10, 7)
+    with pytest.raises(DueDateInPastError):
+        ensure_due_date_not_past(date(2026, 10, 6), today)
+
+
+def test_ensure_due_date_not_past_accepts_today() -> None:
+    today = date(2026, 10, 7)
+    ensure_due_date_not_past(today, today)  # must not raise
+
+
+def test_ensure_due_date_not_past_accepts_future_date() -> None:
+    today = date(2026, 10, 7)
+    ensure_due_date_not_past(date(2026, 10, 8), today)  # must not raise
+
+
+def test_ensure_due_date_not_past_accepts_none() -> None:
+    ensure_due_date_not_past(None, date(2026, 10, 7))  # must not raise
