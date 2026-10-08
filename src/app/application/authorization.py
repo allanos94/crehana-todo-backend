@@ -5,8 +5,6 @@ from inside an already-open `async with uow:` block (the use case owns the
 transaction), and every failure raises the exact `NotFoundError` concrete
 type the HTTP layer maps to 404 -- never 403, so a stranger and a missing
 resource are indistinguishable to the caller.
-
-`status_changeable_task` is added by a later slice (5).
 """
 
 from uuid import UUID
@@ -41,5 +39,26 @@ class AccessPolicy:
         await self.owned_list(list_id, actor_id)
         task = await self._uow.tasks.get(task_id)
         if task is None or task.list_id != list_id:
+            raise TaskNotFoundError()
+        return task
+
+    async def status_changeable_task(
+        self, list_id: UUID, task_id: UUID, actor_id: UUID
+    ) -> Task:
+        """Return the `Task` if `actor_id` owns its list OR is the task's
+        assignee; otherwise always raise `TaskNotFoundError` -- a missing
+        list, a missing task, and a stranger are all indistinguishable to
+        the caller (task-assignment spec: no-enumeration requirement).
+        Unlike `owned_task`, this never raises `TaskListNotFoundError`
+        first: nothing about the list or the task is revealed on failure."""
+        task_list = await self._uow.task_lists.get(list_id)
+        task = await self._uow.tasks.get(task_id)
+        authorized = (
+            task_list is not None
+            and task is not None
+            and task.list_id == list_id
+            and (task_list.owner_id == actor_id or task.assignee_id == actor_id)
+        )
+        if not authorized or task is None:
             raise TaskNotFoundError()
         return task

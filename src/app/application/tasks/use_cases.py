@@ -1,8 +1,9 @@
-"""Task use cases (tasks spec): owner-scoped CRUD and status changes.
+"""Task use cases (tasks spec): owner-scoped CRUD, filtered/paginated
+listing, and status changes.
 
-`ChangeTaskStatus` here is the owner-only path (`AccessPolicy.owned_task`);
-the assignee path (`AccessPolicy.status_changeable_task`) replaces it in
-Phase 8 once assignment lands.
+`ChangeTaskStatus` uses `AccessPolicy.status_changeable_task` (owner OR
+assignee); every other use case here stays owner-only via `owned_list`/
+`owned_task`.
 """
 
 from app.application.authorization import AccessPolicy
@@ -111,8 +112,10 @@ class DeleteTask:
 
 
 class ChangeTaskStatus:
-    """Change an owner-scoped `Task`'s status (tasks spec: strict state
-    machine; owner path only -- see module docstring)."""
+    """Change a `Task`'s status (tasks spec: strict state machine). The
+    list owner OR the task's assignee may call this -- the only
+    status-change privilege a non-owner ever has (task-assignment spec,
+    design ADR-06)."""
 
     def __init__(self, uow: UnitOfWork, clock: Clock) -> None:
         self._uow = uow
@@ -121,7 +124,7 @@ class ChangeTaskStatus:
     async def execute(self, command: ChangeTaskStatusCommand) -> Task:
         async with self._uow:
             policy = AccessPolicy(self._uow)
-            task = await policy.owned_task(
+            task = await policy.status_changeable_task(
                 command.list_id, command.task_id, command.actor_id
             )
             task.change_status(command.status, self._clock.now())

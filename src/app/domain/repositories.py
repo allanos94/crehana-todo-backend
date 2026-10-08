@@ -73,3 +73,7 @@ class TaskRepository(Protocol):
     async def search(
         self, list_id: UUID, filters: TaskFilter, limit: int, offset: int
     ) -> tuple[list[Task], TaskCounts]: ...
+
+    async def list_by_assignee(
+        self, user_id: UUID, limit: int, offset: int
+    ) -> tuple[list[Task], int]: ...

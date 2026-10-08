@@ -1,8 +1,6 @@
 """Application ports as `typing.Protocol`s (design ADR-05).
 
-Repository Protocols live in `domain/repositories.py`. This module starts
-with `Clock` and `UnitOfWork`; `PasswordHasher` and `TokenService` are added
-by slice 1b. `NotificationService` is added by slice 5.
+Repository Protocols live in `domain/repositories.py`.
 """
 
 from dataclasses import dataclass
@@ -63,6 +61,24 @@ class TokenService(Protocol):
     def decode(
         self, token: str, expected_type: TokenType
     ) -> UUID: ...  # raises InvalidTokenError
+
+
+@dataclass(frozen=True, slots=True)
+class TaskInvitation:
+    """A fake email invitation's content (design ADR-12). Never carries a
+    secret or token -- just enough context for a log line."""
+
+    to_email: str
+    task_title: str
+    list_name: str
+    invited_by_email: str
+
+
+class NotificationService(Protocol):
+    """Delivers a fake task-invitation notification, asynchronously and
+    never as a real email (task-assignment spec)."""
+
+    async def send_task_invitation(self, message: TaskInvitation) -> None: ...
 
 
 class UnitOfWork(Protocol):

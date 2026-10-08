@@ -410,8 +410,11 @@ async def test_change_task_status_rejects_invalid_transitions(
 
 async def test_non_owner_is_rejected_on_every_crud_and_status_action() -> None:
     """A stranger who does not own the list gets `TaskListNotFoundError`
-    (the list-ownership check runs before task membership); both map to 404
-    (tasks spec: non-owner access returns 404 in every case)."""
+    for CRUD (the list-ownership check runs before task membership); the
+    status-change path uses `status_changeable_task` instead (Phase 8:
+    owner OR assignee), which always raises the single `TaskNotFoundError`
+    with no two-stage check. Every case maps to 404 (tasks spec: non-owner
+    access returns 404 in every case)."""
     uow = FakeUnitOfWork()
     actor_id = uuid4()
     stranger_id = uuid4()
@@ -450,7 +453,7 @@ async def test_non_owner_is_rejected_on_every_crud_and_status_action() -> None:
             )
         )
 
-    with pytest.raises(TaskListNotFoundError):
+    with pytest.raises(TaskNotFoundError):
         await ChangeTaskStatus(uow, FixedClock(_NOW, _TODAY)).execute(
             ChangeTaskStatusCommand(
                 actor_id=stranger_id,

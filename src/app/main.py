@@ -1,5 +1,6 @@
 """Application composition root: the `create_app()` factory and its lifespan."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -13,6 +14,16 @@ from app.infrastructure.api.routers.tasks import router as tasks_router
 from app.infrastructure.api.routers.users import router as users_router
 from app.infrastructure.config import get_settings
 from app.infrastructure.db.session import create_engine, create_session_factory
+
+# Python's root logger defaults to WARNING with no handler attached, which
+# would silently drop `app.notifications`' INFO invitation lines (and
+# `logger.exception` calls elsewhere) in a real running process -- unlike
+# tests, where `caplog` attaches its own handler regardless. `basicConfig`
+# is idempotent (a no-op once a handler already exists) and runs at import
+# time, before uvicorn's own `dictConfig` (which only configures its own
+# `uvicorn.*` loggers, not root, and explicitly sets
+# `disable_existing_loggers=False`).
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
